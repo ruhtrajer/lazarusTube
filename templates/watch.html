@@ -102,7 +102,7 @@ function showInfo(text) {
 
 function checkStreamWithXhr() {
   var xhr = new XMLHttpRequest();
-  xhr.open("GET", "/stream?v={{ video_id|e }}", true);
+  xhr.open("GET", "/check?v={{ video_id|e }}", true);
   xhr.onreadystatechange = function () {
     if (xhr.readyState === 4) {
       if (xhr.status >= 400) {

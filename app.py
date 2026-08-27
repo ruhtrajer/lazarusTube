@@ -4,6 +4,7 @@ import subprocess
 import json
 import tempfile
 import time
+import threading
 
 from flask import (
     Flask,
@@ -14,7 +15,6 @@ from flask import (
     Response,
     abort,
 )
-import requests
 
 app = Flask(__name__)
 
@@ -28,21 +28,19 @@ try:
 except OSError:
     pass
 
-# Formats combinés (vidéo+audio déjà fusionnés) tentés en priorité.
-STREAM_FORMATS = [
-    "best[ext=mp4][vcodec^=avc1]",
-    "best[ext=mp4]",
-    "b",
-]
-
 # yt-dlp a besoin d'un runtime JS (node) pour décoder les signatures YouTube.
 YT_DLP_EXTRA = ["--js-runtimes", "node"]
 
-# Flux séparés vidéo+audio (cas courant sur YouTube récent) à fusionner.
-MERGE_FORMAT = (
-    "bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]"
-    "/bestvideo[ext=mp4]+bestaudio[ext=m4a]"
-    "/bestvideo+bestaudio/best"
+# Format unique tenté : flux combiné si disponible, sinon fusion vidéo+audio.
+# Le résultat est toujours un MP4 local (voir download_to_file), ce qui évite
+# de proxyfier en direct les flux YouTube (souvent limités/throttlés côté
+# serveur et responsables de lectures qui se figent).
+DOWNLOAD_FORMAT = (
+    "best[ext=mp4][vcodec^=avc1]"
+    "/best[ext=mp4]"
+    "/bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]"
+    "/bestvideo+bestaudio"
+    "/best"
 )
 
 
@@ -69,21 +67,6 @@ def run_yt_dlp(args, timeout=REQUEST_TIMEOUT + 30):
     return out, None
 
 
-def get_direct_url(video_id):
-    url = "https://www.youtube.com/watch?v=" + video_id
-    last_error = None
-    for fmt in STREAM_FORMATS:
-        out, err = run_yt_dlp(["-g", "-f", fmt] + YT_DLP_EXTRA + [url])
-        if out:
-            lines = [line.strip() for line in out.splitlines() if line.strip()]
-            if lines:
-                return lines[0], None
-        last_error = err
-    if last_error:
-        return None, last_error
-    return None, "Aucun flux compatible n'a été trouvé pour cette vidéo."
-
-
 def clean_cache(max_age=3600):
     try:
         now = time.time()
@@ -98,47 +81,59 @@ def clean_cache(max_age=3600):
         pass
 
 
-def download_and_merge(video_id):
-    # Renvoie le chemin d'un fichier MP4 fusionné (vidéo+audio) déjà présent
-    # ou nouvellement téléchargé, sinon None.
-    clean_cache()
-    safe_id = re.sub(r"[^A-Za-z0-9_-]", "", video_id)
-    final_path = os.path.join(CACHE_DIR, safe_id + ".mp4")
-    if os.path.exists(final_path) and os.path.getsize(final_path) > 0:
-        return final_path
+_media_locks = {}
+_media_locks_guard = threading.Lock()
 
-    url = "https://www.youtube.com/watch?v=" + video_id
-    out_tmpl = os.path.join(CACHE_DIR, safe_id + ".%(ext)s")
-    args = [
-        "-f", MERGE_FORMAT,
-        "--merge-output-format", "mp4",
-        "--no-playlist",
-        "-o", out_tmpl,
-    ] + YT_DLP_EXTRA + [url]
-    out, err = run_yt_dlp(args, timeout=DOWNLOAD_TIMEOUT)
-    if os.path.exists(final_path) and os.path.getsize(final_path) > 0:
-        return final_path
-    # Recherche d'un fichier mp4 résiduel si le nom diffère.
-    for name in os.listdir(CACHE_DIR):
-        if name.startswith(safe_id) and name.endswith(".mp4"):
-            p = os.path.join(CACHE_DIR, name)
-            if os.path.getsize(p) > 0:
-                return p
-    if err:
+
+def _media_lock(video_id):
+    with _media_locks_guard:
+        if video_id not in _media_locks:
+            _media_locks[video_id] = threading.Lock()
+        return _media_locks[video_id]
+
+
+def download_to_file(video_id):
+    # Télécharge (et fusionne si besoin) la vidéo en un MP4 local, puis renvoie
+    # son chemin. Renvoie None en cas d'échec. Le fichier est mis en cache pour
+    # les lectures suivantes (lecture fiable, sans coupures).
+    # Le verrou évite deux téléchargements concurrents pour la même vidéo.
+    with _media_lock(video_id):
+        clean_cache()
+        safe_id = re.sub(r"[^A-Za-z0-9_-]", "", video_id)
+        final_path = os.path.join(CACHE_DIR, safe_id + ".mp4")
+        if os.path.exists(final_path) and os.path.getsize(final_path) > 0:
+            return final_path
+
+        url = "https://www.youtube.com/watch?v=" + video_id
+        out_tmpl = os.path.join(CACHE_DIR, safe_id + ".%(ext)s")
+        args = [
+            "-f", DOWNLOAD_FORMAT,
+            "--merge-output-format", "mp4",
+            # faststart : place le moov en tête -> lecture progressive et seek
+            # possibles sur Safari iOS 9.
+            "--postprocessor-args", "ffmpeg:-movflags +faststart",
+            "--no-playlist",
+            "-o", out_tmpl,
+        ] + YT_DLP_EXTRA + [url]
+        out, err = run_yt_dlp(args, timeout=DOWNLOAD_TIMEOUT)
+        if os.path.exists(final_path) and os.path.getsize(final_path) > 0:
+            return final_path
+        # Recherche d'un fichier mp4 résiduel si le nom diffère.
+        for name in os.listdir(CACHE_DIR):
+            if name.startswith(safe_id) and name.endswith(".mp4"):
+                p = os.path.join(CACHE_DIR, name)
+                if os.path.getsize(p) > 0:
+                    return p
+        if err:
+            return None
         return None
-    return None
 
 
 def resolve_media(video_id):
-    # 1. Flux combiné direct (proxy + Range).
-    direct_url, err = get_direct_url(video_id)
-    if direct_url:
-        return {"type": "url", "url": direct_url}, None
-    # 2. Flux séparés -> fusion vidéo+audio via ffmpeg.
-    merged_path = download_and_merge(video_id)
-    if merged_path:
-        return {"type": "file", "path": merged_path}, None
-    return None, err or "Flux indisponible (vidéo ou audio introuvable)."
+    path = download_to_file(video_id)
+    if path:
+        return {"type": "file", "path": path}, None
+    return None, "Flux indisponible (vidéo ou audio introuvable)."
 
 
 def search_videos(query, limit=10):
@@ -212,6 +207,20 @@ def watch():
     if not video_id:
         return redirect(url_for("index"))
     return render_template("watch.html", video_id=video_id, error=None)
+
+
+@app.route("/check")
+def check():
+    video_id = (request.args.get("v") or "").strip()
+    if not video_id:
+        return ("", 400)
+    # Prépare la lecture : lance le téléchargement en arrière-plan afin que le
+    # flux soit prêt (ou en cours) quand la lecture démarre. Les erreurs réelles
+    # sont remontées par l'élément <video> côté client.
+    threading.Thread(
+        target=download_to_file, args=(video_id,), daemon=True
+    ).start()
+    return ("", 200)
 
 
 def serve_file_with_range(path):
@@ -291,47 +300,10 @@ def stream():
     if media["type"] == "file":
         return serve_file_with_range(media["path"])
 
-    media_url = media["url"]
-    headers = {}
-    range_header = request.headers.get("Range")
-    if range_header:
-        headers["Range"] = range_header
-
-    try:
-        upstream = requests.get(
-            media_url,
-            headers=headers,
-            stream=True,
-            timeout=REQUEST_TIMEOUT,
-        )
-    except requests.RequestException as exc:
-        return Response(
-            "Impossible de récupérer le flux : " + str(exc),
-            status=502,
-            mimetype="text/plain",
-        )
-
-    status = upstream.status_code
-    excluded = {"transfer-encoding", "connection", "content-encoding"}
-    resp_headers = {}
-    for key, value in upstream.headers.items():
-        if key.lower() in excluded:
-            continue
-        resp_headers[key] = value
-
-    def generate():
-        try:
-            for chunk in upstream.iter_content(chunk_size=64 * 1024):
-                if chunk:
-                    yield chunk
-        finally:
-            upstream.close()
-
     return Response(
-        generate(),
-        status=status,
-        headers=resp_headers,
-        direct_passthrough=True,
+        "Flux non géré : " + str(media),
+        status=500,
+        mimetype="text/plain",
     )
 
 
