@@ -16,7 +16,8 @@ Application web légère pour **rechercher et lire des vidéos YouTube** sur un 
 
 - Python 3.11 (`python:3.11-slim`)
 - Flask
-- yt-dlp (+ ffmpeg)
+- yt-dlp (version récente, **non épinglée** car YouTube évolue constamment)
+- `ffmpeg` + `nodejs` (runtime JavaScript requis par yt-dlp pour décoder les signatures YouTube)
 - Docker / docker-compose
 
 ## Démarrage
@@ -35,7 +36,7 @@ Puis ouvre `http://<ip-du-conteneur>:3616` depuis Safari sur l'iPad 2.
 | `app.py` | Backend Flask (routes `/`, `/search`, `/watch`, `/stream`) |
 | `templates/index.html` | Page d'accueil + résultats de recherche (ES5) |
 | `templates/watch.html` | Lecteur vidéo HTML5 + gestion d'erreurs (ES5) |
-| `Dockerfile` | Image `python:3.11-slim` + ffmpeg + runtime JS |
+| `Dockerfile` | Image `python:3.11-slim` + ffmpeg + nodejs (runtime JS yt-dlp) |
 | `docker-compose.yml` | Service mappé sur le port `3616` |
 | `requirements.txt` | Dépendances Python |
 

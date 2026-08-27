@@ -32,8 +32,11 @@ except OSError:
 STREAM_FORMATS = [
     "best[ext=mp4][vcodec^=avc1]",
     "best[ext=mp4]",
-    "best",
+    "b",
 ]
+
+# yt-dlp a besoin d'un runtime JS (node) pour décoder les signatures YouTube.
+YT_DLP_EXTRA = ["--js-runtimes", "node"]
 
 # Flux séparés vidéo+audio (cas courant sur YouTube récent) à fusionner.
 MERGE_FORMAT = (
@@ -70,7 +73,7 @@ def get_direct_url(video_id):
     url = "https://www.youtube.com/watch?v=" + video_id
     last_error = None
     for fmt in STREAM_FORMATS:
-        out, err = run_yt_dlp(["-g", "-f", fmt, url])
+        out, err = run_yt_dlp(["-g", "-f", fmt] + YT_DLP_EXTRA + [url])
         if out:
             lines = [line.strip() for line in out.splitlines() if line.strip()]
             if lines:
@@ -111,8 +114,7 @@ def download_and_merge(video_id):
         "--merge-output-format", "mp4",
         "--no-playlist",
         "-o", out_tmpl,
-        url,
-    ]
+    ] + YT_DLP_EXTRA + [url]
     out, err = run_yt_dlp(args, timeout=DOWNLOAD_TIMEOUT)
     if os.path.exists(final_path) and os.path.getsize(final_path) > 0:
         return final_path
@@ -142,7 +144,7 @@ def resolve_media(video_id):
 def search_videos(query, limit=10):
     search_url = "ytsearch%d:%s" % (limit, query)
     out, err = run_yt_dlp(
-        ["--flat-playlist", "--dump-json", search_url]
+        ["--flat-playlist", "--dump-json"] + YT_DLP_EXTRA + [search_url]
     )
     if err and not out:
         return None, err

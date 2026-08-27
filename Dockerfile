@@ -8,11 +8,7 @@ RUN apt-get update \
         ffmpeg \
         ca-certificates \
         nodejs \
-        npm \
     && rm -rf /var/lib/apt/lists/*
-
-# YouTube extraction now requires a JavaScript runtime; provide one for yt-dlp.
-RUN npm install -g deno >/dev/null 2>&1 || true
 
 WORKDIR /app
 
