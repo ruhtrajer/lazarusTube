@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>LazarusTube - Recherche</title>
+<style>
+  * { -webkit-box-sizing: border-box; box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #f4f4f4;
+    color: #222;
+    font-family: -apple-system, "Helvetica Neue", Arial, sans-serif;
+    font-size: 16px;
+  }
+  .container {
+    width: 100%;
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 16px;
+  }
+  header {
+    background: #e62117;
+    color: #fff;
+    padding: 14px 16px;
+    text-align: center;
+  }
+  header h1 {
+    margin: 0;
+    font-size: 24px;
+  }
+  form.search {
+    display: block;
+    margin: 20px 0;
+    text-align: center;
+  }
+  form.search input[type="text"] {
+    width: 70%;
+    max-width: 600px;
+    padding: 12px;
+    font-size: 18px;
+    border: 1px solid #ccc;
+    -webkit-border-radius: 6px;
+    border-radius: 6px;
+  }
+  form.search input[type="submit"] {
+    padding: 12px 20px;
+    font-size: 18px;
+    background: #e62117;
+    color: #fff;
+    border: none;
+    -webkit-border-radius: 6px;
+    border-radius: 6px;
+    cursor: pointer;
+    margin-left: 8px;
+  }
+  .error {
+    background: #ffecec;
+    border: 1px solid #e6a1a1;
+    color: #a11;
+    padding: 12px;
+    -webkit-border-radius: 6px;
+    border-radius: 6px;
+    margin: 12px 0;
+  }
+  .results {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .results li {
+    background: #fff;
+    border: 1px solid #ddd;
+    -webkit-border-radius: 8px;
+    border-radius: 8px;
+    margin-bottom: 14px;
+    overflow: hidden;
+  }
+  .results a {
+    display: block;
+    text-decoration: none;
+    color: #222;
+  }
+  .results .thumb {
+    width: 100%;
+    height: auto;
+    display: block;
+    background: #000;
+  }
+  .results .meta {
+    padding: 12px;
+  }
+  .results .title {
+    font-size: 18px;
+    font-weight: bold;
+    margin: 0 0 6px 0;
+  }
+  .results .duration {
+    color: #777;
+    font-size: 14px;
+  }
+  .empty {
+    text-align: center;
+    color: #777;
+    padding: 24px;
+  }
+  footer {
+    text-align: center;
+    color: #999;
+    font-size: 13px;
+    padding: 20px;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>LazarusTube</h1>
+</header>
+
+<div class="container">
+  <form class="search" method="get" action="/search">
+    <input type="text" name="q" value="{{ query|e }}" placeholder="Rechercher une vidéo...">
+    <input type="submit" value="Rechercher">
+  </form>
+
+  {% if error %}
+  <div class="error">{{ error|e }}</div>
+  {% endif %}
+
+  {% if results is not none %}
+    {% if results|length == 0 %}
+    <div class="empty">Aucun résultat trouvé.</div>
+    {% else %}
+    <ul class="results">
+      {% for video in results %}
+      <li>
+        <a href="/watch?v={{ video.id|e }}">
+          {% if video.thumbnail %}
+          <img class="thumb" src="{{ video.thumbnail|e }}" alt=" miniature " onerror="hideBrokenThumb(this)">
+          {% endif %}
+          <div class="meta">
+            <p class="title">{{ video.title|e }}</p>
+            {% if video.duration %}
+            <p class="duration">Durée : {{ video.duration|duration }}</p>
+            {% endif %}
+          </div>
+        </a>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  {% endif %}
+
+  <footer>LazarusTube &middot; Compatible iPad 2 / iOS 9</footer>
+</div>
+
+<script>
+function hideBrokenThumb(img) {
+  if (img && img.parentNode) {
+    img.parentNode.removeChild(img);
+  }
+}
+</script>
+</body>
+</html>

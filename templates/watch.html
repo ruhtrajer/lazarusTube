@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>LazarusTube - Lecture</title>
+<style>
+  * { -webkit-box-sizing: border-box; box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #111;
+    color: #eee;
+    font-family: -apple-system, "Helvetica Neue", Arial, sans-serif;
+    font-size: 16px;
+  }
+  .container {
+    width: 100%;
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 16px;
+  }
+  .back {
+    display: inline-block;
+    margin: 12px 0;
+    color: #4ea1ff;
+    text-decoration: none;
+    font-size: 16px;
+  }
+  .player {
+    background: #000;
+    -webkit-border-radius: 8px;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid #333;
+  }
+  video {
+    display: block;
+    width: 100%;
+    height: auto;
+    background: #000;
+  }
+  .message {
+    margin: 16px 0;
+    padding: 14px;
+    -webkit-border-radius: 6px;
+    border-radius: 6px;
+    font-size: 16px;
+  }
+  .error {
+    background: #3a1a1a;
+    border: 1px solid #a33;
+    color: #ffb3b3;
+  }
+  .info {
+    background: #1a2a3a;
+    border: 1px solid #3a6aa3;
+    color: #b3d4ff;
+  }
+  footer {
+    text-align: center;
+    color: #777;
+    font-size: 13px;
+    padding: 20px;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <a class="back" href="/">&larr; Retour à la recherche</a>
+
+  <div class="player">
+    <video controls width="100%" src="/stream?v={{ video_id|e }}" preload="metadata">
+      Votre lecteur ne supporte pas la lecture vidéo.
+    </video>
+  </div>
+
+  <div id="status"></div>
+
+  <footer>LazarusTube &middot; Compatible iPad 2 / iOS 9</footer>
+</div>
+
+<script>
+var videoEl = document.getElementsByTagName("video")[0];
+var statusEl = document.getElementById("status");
+
+function showError(text) {
+  statusEl.innerHTML = "";
+  var div = document.createElement("div");
+  div.className = "message error";
+  div.appendChild(document.createTextNode(text));
+  statusEl.appendChild(div);
+}
+
+function showInfo(text) {
+  statusEl.innerHTML = "";
+  var div = document.createElement("div");
+  div.className = "message info";
+  div.appendChild(document.createTextNode(text));
+  statusEl.appendChild(div);
+}
+
+function checkStreamWithXhr() {
+  var xhr = new XMLHttpRequest();
+  xhr.open("GET", "/stream?v={{ video_id|e }}", true);
+  xhr.onreadystatechange = function () {
+    if (xhr.readyState === 4) {
+      if (xhr.status >= 400) {
+        showError("Flux indisponible : " + xhr.responseText);
+      }
+    }
+  };
+  try {
+    xhr.send();
+  } catch (e) {
+    showError("Impossible de contacter le serveur de flux.");
+  }
+}
+
+if (videoEl) {
+  videoEl.addEventListener("error", function () {
+    showError("Cette vidéo n'est pas lisible sur cet appareil (format incompatible ou bloqué).");
+  });
+  videoEl.addEventListener("stalled", function () {
+    showInfo("Chargement en cours, veuillez patienter...");
+  });
+}
+
+checkStreamWithXhr();
+</script>
+</body>
+</html>
