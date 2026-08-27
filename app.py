@@ -1,6 +1,9 @@
+import os
+import re
 import subprocess
 import json
-import shlex
+import tempfile
+import time
 
 from flask import (
     Flask,
@@ -17,15 +20,30 @@ app = Flask(__name__)
 
 YT_DLP_BIN = "yt-dlp"
 REQUEST_TIMEOUT = 30
+DOWNLOAD_TIMEOUT = 1800
 
+CACHE_DIR = os.path.join(tempfile.gettempdir(), "lazarus_cache")
+try:
+    os.makedirs(CACHE_DIR, exist_ok=True)
+except OSError:
+    pass
+
+# Formats combinés (vidéo+audio déjà fusionnés) tentés en priorité.
 STREAM_FORMATS = [
     "best[ext=mp4][vcodec^=avc1]",
     "best[ext=mp4]",
     "best",
 ]
 
+# Flux séparés vidéo+audio (cas courant sur YouTube récent) à fusionner.
+MERGE_FORMAT = (
+    "bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]"
+    "/bestvideo[ext=mp4]+bestaudio[ext=m4a]"
+    "/bestvideo+bestaudio/best"
+)
 
-def run_yt_dlp(args):
+
+def run_yt_dlp(args, timeout=REQUEST_TIMEOUT + 30):
     cmd = [YT_DLP_BIN] + args
     try:
         proc = subprocess.Popen(
@@ -34,7 +52,7 @@ def run_yt_dlp(args):
             stderr=subprocess.PIPE,
             universal_newlines=True,
         )
-        out, err = proc.communicate(timeout=REQUEST_TIMEOUT + 30)
+        out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         try:
             proc.kill()
@@ -61,6 +79,64 @@ def get_direct_url(video_id):
     if last_error:
         return None, last_error
     return None, "Aucun flux compatible n'a été trouvé pour cette vidéo."
+
+
+def clean_cache(max_age=3600):
+    try:
+        now = time.time()
+        for name in os.listdir(CACHE_DIR):
+            path = os.path.join(CACHE_DIR, name)
+            try:
+                if now - os.path.getmtime(path) > max_age:
+                    os.remove(path)
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
+def download_and_merge(video_id):
+    # Renvoie le chemin d'un fichier MP4 fusionné (vidéo+audio) déjà présent
+    # ou nouvellement téléchargé, sinon None.
+    clean_cache()
+    safe_id = re.sub(r"[^A-Za-z0-9_-]", "", video_id)
+    final_path = os.path.join(CACHE_DIR, safe_id + ".mp4")
+    if os.path.exists(final_path) and os.path.getsize(final_path) > 0:
+        return final_path
+
+    url = "https://www.youtube.com/watch?v=" + video_id
+    out_tmpl = os.path.join(CACHE_DIR, safe_id + ".%(ext)s")
+    args = [
+        "-f", MERGE_FORMAT,
+        "--merge-output-format", "mp4",
+        "--no-playlist",
+        "-o", out_tmpl,
+        url,
+    ]
+    out, err = run_yt_dlp(args, timeout=DOWNLOAD_TIMEOUT)
+    if os.path.exists(final_path) and os.path.getsize(final_path) > 0:
+        return final_path
+    # Recherche d'un fichier mp4 résiduel si le nom diffère.
+    for name in os.listdir(CACHE_DIR):
+        if name.startswith(safe_id) and name.endswith(".mp4"):
+            p = os.path.join(CACHE_DIR, name)
+            if os.path.getsize(p) > 0:
+                return p
+    if err:
+        return None
+    return None
+
+
+def resolve_media(video_id):
+    # 1. Flux combiné direct (proxy + Range).
+    direct_url, err = get_direct_url(video_id)
+    if direct_url:
+        return {"type": "url", "url": direct_url}, None
+    # 2. Flux séparés -> fusion vidéo+audio via ffmpeg.
+    merged_path = download_and_merge(video_id)
+    if merged_path:
+        return {"type": "file", "path": merged_path}, None
+    return None, err or "Flux indisponible (vidéo ou audio introuvable)."
 
 
 def search_videos(query, limit=10):
@@ -136,20 +212,84 @@ def watch():
     return render_template("watch.html", video_id=video_id, error=None)
 
 
+def serve_file_with_range(path):
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return Response("Fichier introuvable.", status=500, mimetype="text/plain")
+
+    range_header = request.headers.get("Range")
+    match = None
+    if range_header:
+        match = re.match(r"bytes=(\d*)-(\d*)", range_header.strip())
+
+    if match:
+        start_raw, end_raw = match.group(1), match.group(2)
+        start = int(start_raw) if start_raw else 0
+        end = int(end_raw) if end_raw else size - 1
+        if start >= size:
+            return Response(
+                "Range invalide",
+                status=416,
+                headers={"Content-Range": "bytes */%d" % size},
+            )
+        if end >= size:
+            end = size - 1
+        length = end - start + 1
+
+        def generate_range():
+            with open(path, "rb") as f:
+                f.seek(start)
+                remaining = length
+                while remaining > 0:
+                    chunk = f.read(min(64 * 1024, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                    yield chunk
+
+        headers = {
+            "Content-Range": "bytes %d-%d/%d" % (start, end, size),
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(length),
+            "Content-Type": "video/mp4",
+        }
+        return Response(generate_range(), status=206, headers=headers)
+
+    def generate_full():
+        with open(path, "rb") as f:
+            while True:
+                chunk = f.read(64 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(size),
+        "Content-Type": "video/mp4",
+    }
+    return Response(generate_full(), status=200, headers=headers)
+
+
 @app.route("/stream")
 def stream():
     video_id = (request.args.get("v") or "").strip()
     if not video_id:
         abort(400)
 
-    media_url, err = get_direct_url(video_id)
-    if not media_url:
+    media, err = resolve_media(video_id)
+    if not media:
         return Response(
             "Flux indisponible : " + (err or "erreur inconnue"),
             status=502,
             mimetype="text/plain",
         )
 
+    if media["type"] == "file":
+        return serve_file_with_range(media["path"])
+
+    media_url = media["url"]
     headers = {}
     range_header = request.headers.get("Range")
     if range_header:

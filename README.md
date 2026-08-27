@@ -8,6 +8,7 @@ Application web légère pour **rechercher et lire des vidéos YouTube** sur un 
 
 - Recherche de vidéos via `yt-dlp` (`ytsearch10`).
 - Lecture en flux proxyfié avec support des en-têtes `Range` (`206 Partial Content`) pour le déplacement/seeking sur Safari iOS 9.
+- Gestion de la séparation moderne vidéo/audio de YouTube : si aucun flux combiné n'est disponible, la vidéo et l'audio sont fusionnées en un seul MP4 via `ffmpeg` (yt-dlp) puis servies avec support du seek.
 - Interface en **JavaScript strictement ES5** (pas de `const`, `let`, fléchées, `fetch`, `async`/`await`) compatible WebKit iOS 9.
 - Conteneur Docker écoutant en **HTTP sur le port 3616** (pas de HTTPS, pour éviter les erreurs de certificats sur iOS 9).
 
@@ -43,7 +44,7 @@ Puis ouvre `http://<ip-du-conteneur>:3616` depuis Safari sur l'iPad 2.
 - `GET /` : accueil avec formulaire de recherche.
 - `GET /search?q=...` : 10 premiers résultats (`id`, titre, durée, miniature).
 - `GET /watch?v=...` : page de lecture.
-- `GET /stream?v=...` : flux vidéo proxyfié (supporte `Range` / `206`).
+- `GET /stream?v=...` : flux vidéo proxyfié (supporte `Range` / `206`). En cas de flux séparés vidéo/audio, ceux-ci sont fusionnés en MP4 unique via `ffmpeg` avant envoi.
 
 ## Notes de compatibilité
 
