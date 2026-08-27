@@ -9,7 +9,7 @@ Application web légère pour **rechercher et lire des vidéos YouTube** sur un 
 - Recherche de vidéos via `yt-dlp` (`ytsearch10`).
 - Lecture en flux proxyfié avec support des en-têtes `Range` (`206 Partial Content`) pour le déplacement/seeking sur Safari iOS 9.
 - Interface en **JavaScript strictement ES5** (pas de `const`, `let`, fléchées, `fetch`, `async`/`await`) compatible WebKit iOS 9.
-- Conteneur Docker écoutant en **HTTP sur le port 5000** (pas de HTTPS, pour éviter les erreurs de certificats sur iOS 9).
+- Conteneur Docker écoutant en **HTTP sur le port 3616** (pas de HTTPS, pour éviter les erreurs de certificats sur iOS 9).
 
 ## Stack
 
@@ -25,7 +25,7 @@ docker compose build
 docker compose up
 ```
 
-Puis ouvre `http://<ip-du-conteneur>:5000` depuis Safari sur l'iPad 2.
+Puis ouvre `http://<ip-du-conteneur>:3616` depuis Safari sur l'iPad 2.
 
 ## Structure
 
@@ -35,7 +35,7 @@ Puis ouvre `http://<ip-du-conteneur>:5000` depuis Safari sur l'iPad 2.
 | `templates/index.html` | Page d'accueil + résultats de recherche (ES5) |
 | `templates/watch.html` | Lecteur vidéo HTML5 + gestion d'erreurs (ES5) |
 | `Dockerfile` | Image `python:3.11-slim` + ffmpeg + runtime JS |
-| `docker-compose.yml` | Service mappé sur le port `5000` |
+| `docker-compose.yml` | Service mappé sur le port `3616` |
 | `requirements.txt` | Dépendances Python |
 
 ## Routes
