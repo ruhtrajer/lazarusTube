@@ -707,7 +707,7 @@ Chaque étape est livrable ; P0 peut être déployé avant le relooking.
 - `requirements.txt` : `flask`, `requests`, `waitress`, `yt-dlp` (non épinglé).
 - `requirements-dev.txt` : `pytest`.
 - `Dockerfile` : identique + `waitress` ; CMD
-  `waitress-serve --listen=0.0.0.0:3616 --threads=8 --call app:create_app`.
+  `waitress-serve --listen=0.0.0.0:3616 --threads=16 --call app:create_app`.
   `python app.py` reste disponible pour le développement local.
 - `docker-compose.yml` : volume nommé `lazarus-cache:/cache`, variables
   `LAZARUS_CACHE_DIR`, `LAZARUS_MAX_CACHE_BYTES`,
@@ -801,7 +801,7 @@ Chaque étape est livrable ; P0 peut être déployé avant le relooking.
   `yuv420p`, AAC-LC — pas seulement « h264 + aac ».
 - **Refus des directs/premieres** dès `before_dl`, avant le début du
   téléchargement, pour tenir la promesse « pas de téléchargement de 30 min ».
-- **Cible de concurrence** : un iPad principal + jusqu'à 3 lectures simultanées,
+- **Cible de concurrence** : 3 appareils maximum en lecture simultanée,
   16 threads waitress. Au-delà, serveur asynchrone hors scope.
 
 ## 21. Ce qui reste à décider par le builder
