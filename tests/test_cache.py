@@ -152,3 +152,54 @@ def test_writable_and_free_bytes(tmp_path):
     assert media.writable() is True
     assert media.free_bytes() > 0
     assert not os.path.exists(os.path.join(media.root, ".probe"))
+
+
+# tests/test_cache.py (à la suite)
+from cache import ThumbCache
+
+JPEG = b"\xff\xd8\xff\xe0" + b"x" * 100
+
+def test_thumb_cache_hit_avoids_refetch(tmp_path):
+    calls = []
+    def fetcher(vid, size):
+        calls.append((vid, size))
+        return JPEG
+    now = [1000.0]
+    tc = ThumbCache(str(tmp_path), 1_000_000, fetcher=fetcher, clock=lambda: now[0])
+    assert tc.get("aaaaaaaaaaa") == JPEG
+    assert tc.get("aaaaaaaaaaa") == JPEG
+    assert calls == [("aaaaaaaaaaa", "mq")]
+    assert (tmp_path / "aaaaaaaaaaa-mq.jpg").exists()
+
+def test_thumb_failure_is_negatively_cached(tmp_path):
+    calls = []
+    def fetcher(vid, size):
+        calls.append(vid)
+        return None
+    now = [1000.0]
+    tc = ThumbCache(str(tmp_path), 1_000_000, fetcher=fetcher, clock=lambda: now[0])
+    assert tc.get("aaaaaaaaaaa") is None
+    assert tc.get("aaaaaaaaaaa") is None
+    assert calls == ["aaaaaaaaaaa"]
+    now[0] += 301
+    tc.get("aaaaaaaaaaa")
+    assert calls == ["aaaaaaaaaaa", "aaaaaaaaaaa"]
+
+def test_thumb_rejects_non_jpeg_and_oversize(tmp_path):
+    tc = ThumbCache(str(tmp_path), 1_000_000, fetcher=lambda v, s: b"<html>")
+    assert tc.get("aaaaaaaaaaa") is None
+    big = b"\xff\xd8" + b"x" * 204800
+    tc2 = ThumbCache(str(tmp_path), 1_000_000, fetcher=lambda v, s: big)
+    assert tc2.get("bbbbbbbbbbb") is None
+    assert not list(tmp_path.glob("*.jpg"))
+
+def test_thumb_eviction_by_size(tmp_path):
+    tc = ThumbCache(str(tmp_path), 250, fetcher=lambda v, s: JPEG)
+    tc.get("aaaaaaaaaaa"); tc.get("bbbbbbbbbbb"); tc.get("ccccccccccc")
+    assert len(list(tmp_path.glob("*.jpg"))) <= 2
+
+def test_thumb_rejects_unknown_size(tmp_path):
+    import pytest
+    tc = ThumbCache(str(tmp_path), 1000, fetcher=lambda v, s: JPEG)
+    with pytest.raises(ValueError):
+        tc.get("aaaaaaaaaaa", "xl")

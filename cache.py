@@ -8,6 +8,8 @@ import threading
 import time
 from collections import OrderedDict
 
+import requests
+
 
 class StreamRegistry:
     """Compte les lectures en cours pour protéger les fichiers actifs.
@@ -317,3 +319,153 @@ class MetaCache:
             self._items.move_to_end(video_id)
             while len(self._items) > self.max_entries:
                 self._items.popitem(last=False)
+
+
+def fetch_thumbnail(video_id: str, size: str) -> bytes | None:
+    """Télécharge une miniature YouTube, ou ``None`` en cas d'échec.
+
+    *size* vaut ``"mq"`` (320×180) ou ``"hq"`` (480×360). Seules les réponses
+    JPEG de moins de 200 Kio sont acceptées.
+    """
+    filename = {"mq": "mqdefault.jpg", "hq": "hqdefault.jpg"}.get(size)
+    if filename is None:
+        return None
+    url = "https://i.ytimg.com/vi/" + video_id + "/" + filename
+    try:
+        response = requests.get(
+            url,
+            headers={"User-Agent": "lazarusTube/1.0"},
+            timeout=10,
+        )
+    except requests.RequestException:
+        return None
+
+    if response.status_code != 200:
+        return None
+    content_type = response.headers.get("Content-Type", "")
+    if not content_type.startswith("image/"):
+        return None
+    data = response.content
+    if len(data) > 204800:
+        return None
+    return data
+
+
+class ThumbCache:
+    """Cache disque des miniatures, avec cache négatif en mémoire.
+
+    Les miniatures vivent dans ``<root>/<video_id>-<size>.jpg`` et sont
+    publiées atomiquement. Un échec de téléchargement est mémorisé pendant
+    *negative_ttl* secondes pour éviter de marteler YouTube.
+    """
+
+    _MAX_BYTES = 204800
+
+    def __init__(
+        self,
+        root: str,
+        max_bytes: int,
+        ttl: int = 2592000,
+        negative_ttl: int = 300,
+        fetcher=fetch_thumbnail,
+        clock=time.time,
+    ) -> None:
+        self.root = root
+        self.max_bytes = max_bytes
+        self.ttl = ttl
+        self.negative_ttl = negative_ttl
+        self.fetcher = fetcher
+        self.clock = clock
+        self._lock = threading.Lock()
+        self._negative: dict[tuple[str, str], float] = {}
+
+    def _path(self, video_id: str, size: str) -> str:
+        return os.path.join(self.root, video_id + "-" + size + ".jpg")
+
+    def get(self, video_id: str, size: str = "mq") -> bytes | None:
+        """Retourne la miniature de *video_id*, en la téléchargeant au besoin."""
+        if size not in ("mq", "hq"):
+            raise ValueError("taille de miniature inconnue : " + repr(size))
+
+        path = self._path(video_id, size)
+        now = self.clock()
+        try:
+            stat = os.stat(path)
+        except OSError:
+            stat = None
+        if stat is not None and now - stat.st_mtime <= self.ttl:
+            try:
+                with open(path, "rb") as handle:
+                    return handle.read()
+            except OSError:
+                pass
+
+        key = (video_id, size)
+        with self._lock:
+            failed_at = self._negative.get(key)
+            if failed_at is not None and now - failed_at <= self.negative_ttl:
+                return None
+            self._negative.pop(key, None)
+
+        data = self.fetcher(video_id, size)
+        if data is None:
+            with self._lock:
+                self._negative[key] = self.clock()
+            return None
+        if len(data) > self._MAX_BYTES or data[:2] != b"\xff\xd8":
+            return None
+
+        self._write(path, data)
+        self.evict()
+        return data
+
+    def _write(self, path: str, data: bytes) -> None:
+        """Écrit *data* dans un fichier temporaire puis le publie atomiquement."""
+        os.makedirs(self.root, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(
+            dir=self.root,
+            prefix="." + os.path.basename(path) + "-",
+            suffix=".tmp",
+        )
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_path, path)
+        except BaseException:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+            raise
+
+    def evict(self) -> None:
+        """Évince les miniatures les plus anciennes au-delà du budget disque."""
+        try:
+            names = os.listdir(self.root)
+        except OSError:
+            return
+
+        entries: list[tuple[float, str, int]] = []
+        total = 0
+        for name in names:
+            if not name.endswith(".jpg"):
+                continue
+            path = os.path.join(self.root, name)
+            try:
+                stat = os.stat(path)
+            except OSError:
+                continue
+            entries.append((stat.st_mtime, path, stat.st_size))
+            total += stat.st_size
+
+        entries.sort(key=lambda entry: entry[0])
+        for _mtime, path, size in entries:
+            if total <= self.max_bytes:
+                break
+            try:
+                os.remove(path)
+            except OSError:
+                continue
+            total -= size
