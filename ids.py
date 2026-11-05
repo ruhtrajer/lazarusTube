@@ -32,7 +32,11 @@ def extract_video_id(text: str) -> str | None:
     if is_valid_video_id(value):
         return value
 
-    parts = urlsplit(value)
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        return None
+
     if parts.scheme not in ("http", "https"):
         return None
 

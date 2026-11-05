@@ -26,6 +26,7 @@ def test_is_valid_video_id(value, expected):
     ("https://www.youtube.com/live/dQw4w9WgXcQ", "dQw4w9WgXcQ"),
     ("https://www.youtube.com/v/dQw4w9WgXcQ", "dQw4w9WgXcQ"),
     ("https://example.com/watch?v=dQw4w9WgXcQ", None),
+    ("http://[::1", None),
     ("jazz français", None),
     ("", None),
 ])
