@@ -76,3 +76,28 @@ def test_head_has_headers_without_body(client, media):
 def test_missing_file_returns_404(client, tmp_path):
     with client.application.test_request_context("/stream"):
         assert range_response(str(tmp_path / "absent.mp4"), None).status_code == 404
+
+def test_head_missing_file_has_no_body(client, tmp_path):
+    with client.application.test_request_context("/stream", method="HEAD"):
+        resp = range_response(str(tmp_path / "absent.mp4"), None, head=True)
+        assert resp.status_code == 404
+        assert resp.headers["Content-Length"] == "20"
+        assert resp.get_data() == b""
+
+def test_head_invalid_range_has_no_body(client, media):
+    with client.application.test_request_context("/stream", method="HEAD"):
+        resp = range_response(media, "bytes=999999-", head=True)
+        assert resp.status_code == 416
+        assert resp.headers["Content-Range"] == "bytes */1024"
+        assert resp.headers["Content-Length"] == "24"
+        assert resp.get_data() == b""
+
+def test_closing_unstarted_response_calls_registry_end_once(client, media):
+    reg = Registry()
+    with client.application.test_request_context("/stream"):
+        resp = range_response(media, "bytes=0-99", reg)
+        assert reg.events == [("begin", media)]
+        resp.close()
+        resp.close()
+    assert reg.events == [("begin", media), ("end", media)]
+

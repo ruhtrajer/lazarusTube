@@ -2,7 +2,7 @@
 
 import os
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 from flask import Response
 
@@ -60,11 +60,31 @@ def parse_range(header: str | None, size: int) -> tuple[int, int] | None:
     return (start, min(end, size - 1))
 
 
+def _make_on_end(
+    path: str,
+    registry: object | None,
+) -> Callable[[], None] | None:
+    """Construit une fermeture idempotente appelant ``registry.end(path)``."""
+    if registry is None:
+        return None
+
+    called = False
+
+    def on_end() -> None:
+        nonlocal called
+        if called:
+            return
+        called = True
+        registry.end(path)
+
+    return on_end
+
+
 def _iter_file(
     path: str,
     start: int,
     length: int,
-    registry: object | None = None,
+    on_end: Callable[[], None] | None = None,
 ) -> Iterator[bytes]:
     """Générateur lisant *length* octets depuis *start*, par blocs de 64 Kio."""
     try:
@@ -78,8 +98,8 @@ def _iter_file(
                 remaining -= len(chunk)
                 yield chunk
     finally:
-        if registry is not None:
-            registry.end(path)
+        if on_end is not None:
+            on_end()
 
 
 def _base_headers(length: int) -> dict[str, str]:
@@ -89,6 +109,29 @@ def _base_headers(length: int) -> dict[str, str]:
         "Content-Type": _CONTENT_TYPE,
         "Cache-Control": "no-store",
     }
+
+
+def _text_response(
+    message: str,
+    status: int,
+    head: bool,
+    headers: dict[str, str] | None = None,
+) -> Response:
+    """Réponse texte dont la version HEAD annonce la taille sans corps."""
+    body = message.encode("utf-8")
+    response_headers = {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Content-Length": str(len(body)),
+    }
+    if headers is not None:
+        response_headers.update(headers)
+
+    if head:
+        response = Response(b"", status=status, headers=response_headers)
+        # ``set_data`` force Content-Length à 0 ; on annonce la taille du GET.
+        response.headers["Content-Length"] = str(len(body))
+        return response
+    return Response(body, status=status, headers=response_headers)
 
 
 def range_response(
@@ -106,19 +149,19 @@ def range_response(
     try:
         size = os.path.getsize(path)
     except OSError:
-        return Response("Fichier introuvable.", status=404, content_type="text/plain")
+        return _text_response("Fichier introuvable.", 404, head)
 
     try:
         byte_range = parse_range(range_header, size)
     except RangeNotSatisfiable as exc:
-        return Response(
+        return _text_response(
             "Range non satisfaisable.",
-            status=416,
+            416,
+            head,
             headers={
                 "Accept-Ranges": "bytes",
                 "Content-Range": f"bytes */{exc.size}",
             },
-            content_type="text/plain",
         )
 
     if byte_range is None:
@@ -147,4 +190,13 @@ def range_response(
     if registry is not None:
         registry.begin(path)
 
-    return Response(_iter_file(path, start, length, registry), status=status, headers=headers)
+    on_end = _make_on_end(path, registry)
+    response = Response(
+        _iter_file(path, start, length, on_end),
+        status=status,
+        headers=headers,
+    )
+    if on_end is not None:
+        # Couvre une fermeture avant la première itération du générateur.
+        response.call_on_close(on_end)
+    return response
