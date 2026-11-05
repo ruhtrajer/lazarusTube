@@ -801,7 +801,7 @@ Chaque étape est livrable ; P0 peut être déployé avant le relooking.
   `yuv420p`, AAC-LC — pas seulement « h264 + aac ».
 - **Refus des directs/premieres** dès `before_dl`, avant le début du
   téléchargement, pour tenir la promesse « pas de téléchargement de 30 min ».
-- **Cible de concurrence** : 3 appareils maximum en lecture simultanée,
+- **Cible de concurrence** : un iPad principal + jusqu'à 3 lectures simultanées,
   16 threads waitress. Au-delà, serveur asynchrone hors scope.
 
 ## 21. Ce qui reste à décider par le builder
