@@ -131,6 +131,9 @@ class YtDlp:
         max_height: int = 720,
     ) -> str:
         """Télécharge *video_id* dans *tmpdir* et retourne le MP4 produit."""
+        if not is_valid_video_id(video_id):
+            raise YtDlpError(_DOWNLOAD_ERROR)
+
         out_tmpl = os.path.join(tmpdir, "%(id)s.%(ext)s")
         args = [
             self.bin,
@@ -154,7 +157,8 @@ class YtDlp:
             "--concurrent-fragments",
             "4",
             "--print",
-            META_PREFIX
+            "before_dl:"
+            + META_PREFIX
             + '{"id":%(id)j,"title":%(title)j,"channel":%(channel)j,'
             '"duration":%(duration)j,"view_count":%(view_count)j,'
             '"live_status":%(live_status)j}',

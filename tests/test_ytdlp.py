@@ -1,3 +1,4 @@
+import json
 import os
 import stat
 import pytest
@@ -75,3 +76,33 @@ def test_missing_output_raises(tmp_path):
     work = tmp_path / "work"; work.mkdir()
     with pytest.raises(YtDlpError):
         yt.download("dQw4w9WgXcQ", str(work))
+
+def test_download_uses_before_dl_meta_print(tmp_path):
+    record = tmp_path / "argv.json"
+    body = f"""
+import sys, json
+args = sys.argv[1:]
+open({str(record)!r}, "w").write(json.dumps(args))
+out = args[args.index("-o") + 1]
+path = out.replace("%(id)s", "dQw4w9WgXcQ").replace("%(ext)s", "mp4")
+open(path, "wb").write(b"x")
+"""
+    yt = YtDlp(bin=fake_bin(tmp_path, body), download_timeout=10)
+    work = tmp_path / "work"; work.mkdir()
+    yt.download("dQw4w9WgXcQ", str(work))
+    args = json.loads(record.read_text())
+    value = args[args.index("--print") + 1]
+    assert value.startswith("before_dl:LAZARUS_META ")
+
+def test_download_rejects_invalid_id_before_starting_process(tmp_path):
+    marker = tmp_path / "started"
+    body = f"""
+import pathlib
+pathlib.Path({str(marker)!r}).write_text("started")
+"""
+    yt = YtDlp(bin=fake_bin(tmp_path, body), download_timeout=10)
+    work = tmp_path / "work"; work.mkdir()
+    with pytest.raises(YtDlpError) as exc:
+        yt.download("bad\x00id", str(work))
+    assert exc.value.user_message == "Impossible de préparer cette vidéo."
+    assert not marker.exists()
