@@ -173,7 +173,7 @@ class JobRegistry:
     def _run(self, job: Job) -> None:
         """Exécute le téléchargement d'un job dans un thread démon."""
         with self._lock_for(job.video_id):
-            tmpdir = None
+            tmpdirs: list[str] = []
             try:
                 with self._semaphore:
                     if self.media.has(job.video_id):
@@ -188,13 +188,10 @@ class JobRegistry:
                         self._fail(job, _DISK_MESSAGE)
                         return
 
-                    tmp_root = os.path.join(self.media.root, "tmp")
-                    os.makedirs(tmp_root, exist_ok=True)
-                    tmpdir = tempfile.mkdtemp(
-                        prefix=job.video_id + "-", dir=tmp_root
-                    )
+                    tmpdir = self._make_tmpdir(job.video_id)
+                    tmpdirs.append(tmpdir)
 
-                    path = self._download(job, tmpdir)
+                    path = self._download(job, tmpdir, tmpdirs)
                     self.media.publish(job.video_id, path, job.meta)
                     self._mark_ready(job)
                     self.media.evict()
@@ -210,13 +207,19 @@ class JobRegistry:
                 )
                 self._fail(job, _GENERIC_MESSAGE)
             finally:
-                if tmpdir is not None:
+                for tmpdir in tmpdirs:
                     shutil.rmtree(tmpdir, ignore_errors=True)
                 with self._lock:
                     job.finished_at = self.clock()
                 self.cleanup()
 
-    def _download(self, job: Job, tmpdir: str) -> str:
+    def _make_tmpdir(self, video_id: str) -> str:
+        """Crée un dossier temporaire dédié à une tentative de téléchargement."""
+        tmp_root = os.path.join(self.media.root, "tmp")
+        os.makedirs(tmp_root, exist_ok=True)
+        return tempfile.mkdtemp(prefix=video_id + "-", dir=tmp_root)
+
+    def _download(self, job: Job, tmpdir: str, tmpdirs: list[str]) -> str:
         """Télécharge le MP4, avec une seconde tentative en 480p si besoin."""
         progress = self._progress_callback(job)
         meta = self._meta_callback(job)
@@ -231,9 +234,14 @@ class JobRegistry:
         try:
             validate_mp4(path)
         except FormatError:
+            # yt-dlp ne réécrit pas un fichier final existant : le repli 480p
+            # doit repartir d'un dossier vierge pour produire une nouvelle
+            # rendition au lieu de revalider le même fichier invalide.
+            fallback_dir = self._make_tmpdir(job.video_id)
+            tmpdirs.append(fallback_dir)
             path = self.ytdlp.download(
                 job.video_id,
-                tmpdir,
+                fallback_dir,
                 on_progress=progress,
                 on_meta=meta,
                 max_height=_FALLBACK_HEIGHT,

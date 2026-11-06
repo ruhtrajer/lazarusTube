@@ -9,6 +9,7 @@ from ytdlp import LiveNotSupported, YtDlpError
 class FakeYtDlp:
     def __init__(self):
         self.calls = []
+        self.dirs = []
         self.error = None
         self.meta = {"title": "T", "channel": "C", "duration": 10}
         self.gate = threading.Event()
@@ -21,6 +22,7 @@ class FakeYtDlp:
             self.active += 1
             self.max_active = max(self.max_active, self.active)
         self.calls.append(max_height)
+        self.dirs.append(tmpdir)
         try:
             self.gate.wait(5)
             if on_meta:
@@ -94,6 +96,22 @@ def test_retries_480_after_format_error(tmp_path, monkeypatch):
     snap = wait_state(reg, "dQw4w9WgXcQ", ("ready", "error"))
     assert snap["state"] == "ready"
     assert fake.calls == [720, 480]
+
+def test_fallback_480_uses_fresh_temp_directory(tmp_path, monkeypatch):
+    import jobs
+    seen = []
+    def validate(path):
+        seen.append(path)
+        if len(seen) == 1:
+            raise FormatError("Format incompatible avec cet appareil.")
+    monkeypatch.setattr(jobs, "validate_mp4", validate)
+    reg, media, fake = make(tmp_path)
+    reg.start("dQw4w9WgXcQ")
+    snap = wait_state(reg, "dQw4w9WgXcQ", ("ready", "error"))
+    assert snap["state"] == "ready"
+    assert len(fake.dirs) == 2
+    assert fake.dirs[0] != fake.dirs[1]
+    assert seen[0] != seen[1]
 
 def test_double_format_failure_reports_clear_error(tmp_path, monkeypatch):
     import jobs
