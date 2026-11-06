@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="LazarusTube">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title>{% block title %}LazarusTube{% endblock %}</title>
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='img/apple-touch-icon.png') }}">
+<link rel="icon" type="image/png" href="{{ url_for('static', filename='img/favicon.png') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}?v={{ asset_version }}">
+</head>
+<body{% block body_attrs %}{% endblock %}>
+<header class="site-header">
+  <div class="header-inner">
+    <a class="logo" href="{{ url_for('index') }}">
+      <img src="{{ url_for('static', filename='img/logo.png') }}" alt="LazarusTube" height="40">
+    </a>
+    <nav class="nav">
+      <a class="nav-link{% if active_page == 'home' %} active{% endif %}" href="/">Accueil</a>
+      <a class="nav-link{% if active_page == 'history' %} active{% endif %}" href="/history">Historique</a>
+      <a class="nav-link{% if active_page == 'favorites' %} active{% endif %}" href="/favorites">Favoris</a>
+    </nav>
+  </div>
+</header>
+<main{% block main_attrs %} class="container"{% endblock %}>
+{% block content %}{% endblock %}
+</main>
+<footer class="site-footer">LazarusTube &middot; Compatible iPad 2 / iOS 9</footer>
+<script src="{{ url_for('static', filename='js/app.js') }}?v={{ asset_version }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>
