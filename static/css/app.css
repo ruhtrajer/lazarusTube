@@ -400,6 +400,92 @@ img {
   font-weight: bold;
 }
 
+/* Bibliothèque */
+
+.library-head {
+  margin: 0 0 16px;
+  padding: 0 0 8px;
+  border-bottom: 1px solid #DCE6EA;
+}
+
+.library-title {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.3;
+}
+
+#library-count {
+  display: inline-block;
+  margin-right: 10px;
+  color: #62788A;
+  font-size: 14px;
+}
+
+#clear-library {
+  margin-left: 8px;
+}
+
+.library-item {
+  position: relative;
+  display: inline-block;
+  width: 48%;
+  margin: 0 4% 20px 0;
+  vertical-align: top;
+  font-size: 16px;
+}
+
+.library-item:nth-child(2n) {
+  margin-right: 0;
+}
+
+.library-item .card {
+  display: block;
+  width: 100%;
+  margin: 0;
+}
+
+.library-item .card-meta {
+  padding-right: 72px;
+}
+
+.card-remove {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  z-index: 3;
+  min-width: 44px;
+  height: 44px;
+  padding: 0 10px;
+  color: #CF6957;
+  background: transparent;
+  font-family: inherit;
+  font-size: 14px;
+  border: 0;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.card-remove:focus {
+  outline: 3px solid #3EADBA;
+  outline-offset: 2px;
+}
+
+#library-empty {
+  margin: 24px 0;
+  padding: 24px 16px;
+  color: #62788A;
+  text-align: center;
+  background: #FFFFFF;
+  border: 1px solid #DCE6EA;
+  -webkit-border-radius: 10px;
+  border-radius: 10px;
+}
+
+#library-empty a {
+  color: #1A6A8D;
+}
+
 /* État de chargement */
 
 .spinner {
@@ -654,6 +740,11 @@ img {
 
 @media (max-width: 699px) {
   .card {
+    width: 100%;
+    margin-right: 0;
+  }
+
+  .library-item {
     width: 100%;
     margin-right: 0;
   }

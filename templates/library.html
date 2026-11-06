@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }} - LazarusTube{% endblock %}
+
+{% block main_attrs %} id="library" class="container" data-kind="{{ kind }}"{% endblock %}
+
+{% block content %}
+<section class="library-head">
+  <h1 class="library-title">{{ title }}</h1>
+  <span id="library-count">0 vidéo</span>
+  <button id="clear-library" class="btn btn-secondary hidden" type="button">Vider</button>
+</section>
+
+<p id="library-empty" class="empty hidden">Aucune vidéo pour le moment. <a href="/">Retour à l'accueil</a></p>
+
+<div id="library-grid" class="results"></div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/library.js') }}?v={{ asset_version }}"></script>
+{% endblock %}

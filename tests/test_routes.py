@@ -200,3 +200,19 @@ def test_watch_has_metadata_dataset_for_storage(client, services, tmp_path):
     assert 'data-channel="Chaîne"' in html
     assert 'data-duration="125"' in html
     assert 'data-view-count="1200000"' in html
+
+def test_history_page_shell(client):
+    html = client.get("/history").get_data(as_text=True)
+    assert 'data-kind="history"' in html
+    assert "Historique" in html
+    assert 'id="library-grid"' in html
+    assert 'id="library-empty"' in html
+    assert 'id="clear-library"' in html
+    assert '/static/js/library.js' in html
+    assert 'class="nav-link active"' in html
+
+def test_favorites_page_shell(client):
+    html = client.get("/favorites").get_data(as_text=True)
+    assert 'data-kind="favorites"' in html
+    assert "Favoris" in html
+    assert 'id="library-grid"' in html

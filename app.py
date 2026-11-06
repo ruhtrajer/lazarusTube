@@ -191,6 +191,24 @@ def create_app(overrides: dict | None = None) -> Flask:
             refresh_url=None,
         )
 
+    @app.route("/history")
+    def history():
+        return render_template(
+            "library.html",
+            kind="history",
+            active_page="history",
+            title="Historique",
+        )
+
+    @app.route("/favorites")
+    def favorites():
+        return render_template(
+            "library.html",
+            kind="favorites",
+            active_page="favorites",
+            title="Favoris",
+        )
+
     @app.route("/search")
     def search():
         query = (request.args.get("q") or "").strip()[: cfg.max_query_length]
