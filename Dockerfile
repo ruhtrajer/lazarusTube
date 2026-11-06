@@ -19,4 +19,4 @@ COPY . /app
 
 EXPOSE 3616
 
-CMD ["python", "app.py"]
+CMD ["waitress-serve", "--listen=0.0.0.0:3616", "--threads=16", "--call", "app:create_app"]
