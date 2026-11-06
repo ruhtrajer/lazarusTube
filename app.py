@@ -1,321 +1,325 @@
+"""Application Flask de LazarusTube.
+
+Le module expose :func:`create_app`, une fabrique qui construit la
+configuration, les services (cache, jobs, yt-dlp) et les routes. Les tests
+injectent leurs dépendances via ``overrides`` plutôt que de toucher au réseau.
+"""
+
+import logging
 import os
-import re
-import subprocess
-import json
-import tempfile
-import time
-import threading
+import shutil
+from dataclasses import fields, replace
+from types import SimpleNamespace
 
 from flask import (
     Flask,
-    request,
-    render_template,
-    redirect,
-    url_for,
     Response,
     abort,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    url_for,
 )
 
-app = Flask(__name__)
-
-YT_DLP_BIN = "yt-dlp"
-REQUEST_TIMEOUT = 30
-DOWNLOAD_TIMEOUT = 1800
-
-CACHE_DIR = os.path.join(tempfile.gettempdir(), "lazarus_cache")
-try:
-    os.makedirs(CACHE_DIR, exist_ok=True)
-except OSError:
-    pass
-
-# yt-dlp a besoin d'un runtime JS (node) pour décoder les signatures YouTube.
-YT_DLP_EXTRA = ["--js-runtimes", "node"]
-
-# Format unique tenté : flux combiné si disponible, sinon fusion vidéo+audio.
-# Le résultat est toujours un MP4 local (voir download_to_file), ce qui évite
-# de proxyfier en direct les flux YouTube (souvent limités/throttlés côté
-# serveur et responsables de lectures qui se figent).
-DOWNLOAD_FORMAT = (
-    "best[ext=mp4][vcodec^=avc1]"
-    "/best[ext=mp4]"
-    "/bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]"
-    "/bestvideo+bestaudio"
-    "/best"
+from cache import (
+    MediaCache,
+    MetaCache,
+    SearchCache,
+    StreamRegistry,
+    ThumbCache,
+    fetch_thumbnail,
 )
+from config import Config, load_config
+from ids import extract_video_id, is_valid_video_id
+from jobs import ForceRefused, JobRegistry
+from streaming import range_response
+from ytdlp import YtDlp, YtDlpError
+
+_LOG = logging.getLogger(__name__)
+
+_EMPTY_QUERY = "Veuillez saisir un terme de recherche."
+_INVALID_ID = "Identifiant vidéo invalide."
+_BUSY_STREAM = "Cette vidéo est en cours de lecture."
+_NOT_PREPARED = "Vidéo non préparée."
 
 
-def run_yt_dlp(args, timeout=REQUEST_TIMEOUT + 30):
-    cmd = [YT_DLP_BIN] + args
+def format_duration(value) -> str:
+    """Formate une durée en secondes (``1:02:03`` / ``12:34`` / ``""``)."""
     try:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            universal_newlines=True,
-        )
-        out, err = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        try:
-            proc.kill()
-        except Exception:
-            pass
-        return None, "yt-dlp a expiré (timeout)."
-    except FileNotFoundError:
-        return None, "yt-dlp n'est pas installé dans le conteneur."
-    if proc.returncode != 0:
-        return None, (err or "yt-dlp a échoué.").strip()
-    return out, None
-
-
-def clean_cache(max_age=3600):
-    try:
-        now = time.time()
-        for name in os.listdir(CACHE_DIR):
-            path = os.path.join(CACHE_DIR, name)
-            try:
-                if now - os.path.getmtime(path) > max_age:
-                    os.remove(path)
-            except OSError:
-                pass
-    except OSError:
-        pass
-
-
-_media_locks = {}
-_media_locks_guard = threading.Lock()
-
-
-def _media_lock(video_id):
-    with _media_locks_guard:
-        if video_id not in _media_locks:
-            _media_locks[video_id] = threading.Lock()
-        return _media_locks[video_id]
-
-
-def download_to_file(video_id):
-    # Télécharge (et fusionne si besoin) la vidéo en un MP4 local, puis renvoie
-    # son chemin. Renvoie None en cas d'échec. Le fichier est mis en cache pour
-    # les lectures suivantes (lecture fiable, sans coupures).
-    # Le verrou évite deux téléchargements concurrents pour la même vidéo.
-    with _media_lock(video_id):
-        clean_cache()
-        safe_id = re.sub(r"[^A-Za-z0-9_-]", "", video_id)
-        final_path = os.path.join(CACHE_DIR, safe_id + ".mp4")
-        if os.path.exists(final_path) and os.path.getsize(final_path) > 0:
-            return final_path
-
-        url = "https://www.youtube.com/watch?v=" + video_id
-        out_tmpl = os.path.join(CACHE_DIR, safe_id + ".%(ext)s")
-        args = [
-            "-f", DOWNLOAD_FORMAT,
-            "--merge-output-format", "mp4",
-            # faststart : place le moov en tête -> lecture progressive et seek
-            # possibles sur Safari iOS 9.
-            "--postprocessor-args", "ffmpeg:-movflags +faststart",
-            "--no-playlist",
-            "-o", out_tmpl,
-        ] + YT_DLP_EXTRA + [url]
-        out, err = run_yt_dlp(args, timeout=DOWNLOAD_TIMEOUT)
-        if os.path.exists(final_path) and os.path.getsize(final_path) > 0:
-            return final_path
-        # Recherche d'un fichier mp4 résiduel si le nom diffère.
-        for name in os.listdir(CACHE_DIR):
-            if name.startswith(safe_id) and name.endswith(".mp4"):
-                p = os.path.join(CACHE_DIR, name)
-                if os.path.getsize(p) > 0:
-                    return p
-        if err:
-            return None
-        return None
-
-
-def resolve_media(video_id):
-    path = download_to_file(video_id)
-    if path:
-        return {"type": "file", "path": path}, None
-    return None, "Flux indisponible (vidéo ou audio introuvable)."
-
-
-def search_videos(query, limit=10):
-    search_url = "ytsearch%d:%s" % (limit, query)
-    out, err = run_yt_dlp(
-        ["--flat-playlist", "--dump-json"] + YT_DLP_EXTRA + [search_url]
-    )
-    if err and not out:
-        return None, err
-    results = []
-    if out:
-        for line in out.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                data = json.loads(line)
-            except ValueError:
-                continue
-            results.append({
-                "id": data.get("id", ""),
-                "title": data.get("title", "Sans titre"),
-                "duration": data.get("duration") or data.get("duration_string") or "",
-                "thumbnail": data.get("thumbnail", ""),
-            })
-    return results, None
-
-
-def format_duration(value):
-    try:
-        secs = int(value)
+        seconds = int(value)
     except (TypeError, ValueError):
         return ""
-    if secs <= 0:
+    if seconds <= 0:
         return ""
-    m, s = divmod(secs, 60)
-    h, m = divmod(m, 60)
-    if h > 0:
-        return "%d:%02d:%02d" % (h, m, s)
-    return "%d:%02d" % (m, s)
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours > 0:
+        return "%d:%02d:%02d" % (hours, minutes, seconds)
+    return "%d:%02d" % (minutes, seconds)
 
 
-app.jinja_env.filters["duration"] = format_duration
+def _compact_number(value: float) -> str:
+    """Formate un nombre avec au plus une décimale et une virgule française."""
+    text = "%.1f" % value
+    if text.endswith(".0"):
+        text = text[:-2]
+    return text.replace(".", ",")
 
 
-@app.route("/")
-def index():
-    return render_template("index.html", query="", results=None, error=None)
-
-
-@app.route("/search")
-def search():
-    query = (request.args.get("q") or "").strip()
-    if not query:
-        return render_template(
-            "index.html", query="", results=[], error="Veuillez saisir un terme de recherche."
-        )
-    results, err = search_videos(query)
-    if err:
-        return render_template(
-            "index.html", query=query, results=None, error=err
-        )
-    return render_template(
-        "index.html", query=query, results=results, error=None
-    )
-
-
-@app.route("/watch")
-def watch():
-    video_id = (request.args.get("v") or "").strip()
-    if not video_id:
-        return redirect(url_for("index"))
-    return render_template("watch.html", video_id=video_id, error=None)
-
-
-@app.route("/check")
-def check():
-    video_id = (request.args.get("v") or "").strip()
-    if not video_id:
-        return ("", 400)
-    # Prépare la lecture : lance le téléchargement en arrière-plan afin que le
-    # flux soit prêt (ou en cours) quand la lecture démarre. Les erreurs réelles
-    # sont remontées par l'élément <video> côté client.
-    threading.Thread(
-        target=download_to_file, args=(video_id,), daemon=True
-    ).start()
-    return ("", 200)
-
-
-def serve_file_with_range(path):
+def format_views(count) -> str:
+    """Formate un nombre de vues (``1,2 M`` / ``45 k`` / ``""``)."""
     try:
-        size = os.path.getsize(path)
-    except OSError:
-        return Response("Fichier introuvable.", status=500, mimetype="text/plain")
+        views = int(count)
+    except (TypeError, ValueError):
+        return ""
+    if views < 0:
+        return ""
+    if views >= 1_000_000:
+        return _compact_number(views / 1_000_000.0) + " M"
+    if views >= 1_000:
+        return _compact_number(views / 1_000.0) + " k"
+    return str(views)
 
-    range_header = request.headers.get("Range")
-    match = None
-    if range_header:
-        match = re.match(r"bytes=(\d*)-(\d*)", range_header.strip())
 
-    if match:
-        start_raw, end_raw = match.group(1), match.group(2)
-        start = int(start_raw) if start_raw else 0
-        end = int(end_raw) if end_raw else size - 1
-        if start >= size:
-            return Response(
-                "Range invalide",
-                status=416,
-                headers={"Content-Range": "bytes */%d" % size},
-            )
-        if end >= size:
-            end = size - 1
-        length = end - start + 1
+def create_app(overrides: dict | None = None) -> Flask:
+    """Construit et configure l'application Flask.
 
-        def generate_range():
-            with open(path, "rb") as f:
-                f.seek(start)
-                remaining = length
-                while remaining > 0:
-                    chunk = f.read(min(64 * 1024, remaining))
-                    if not chunk:
-                        break
-                    remaining -= len(chunk)
-                    yield chunk
-
-        headers = {
-            "Content-Range": "bytes %d-%d/%d" % (start, end, size),
-            "Accept-Ranges": "bytes",
-            "Content-Length": str(length),
-            "Content-Type": "video/mp4",
-        }
-        return Response(generate_range(), status=206, headers=headers)
-
-    def generate_full():
-        with open(path, "rb") as f:
-            while True:
-                chunk = f.read(64 * 1024)
-                if not chunk:
-                    break
-                yield chunk
-
-    headers = {
-        "Accept-Ranges": "bytes",
-        "Content-Length": str(size),
-        "Content-Type": "video/mp4",
+    ``overrides`` accepte les champs de :class:`config.Config` (appliqués via
+    ``dataclasses.replace``) ainsi que les clés de service ``"ytdlp"`` et
+    ``"thumbs_fetcher"``.
+    """
+    overrides = dict(overrides or {})
+    config_names = {field.name for field in fields(Config)}
+    config_overrides = {
+        name: value for name, value in overrides.items() if name in config_names
     }
-    return Response(generate_full(), status=200, headers=headers)
+    cfg = replace(load_config(), **config_overrides)
 
+    level = getattr(logging, str(cfg.log_level).upper(), logging.INFO)
+    logging.basicConfig(level=level)
 
-@app.route("/stream")
-def stream():
-    video_id = (request.args.get("v") or "").strip()
-    if not video_id:
-        abort(400)
+    streams = StreamRegistry()
+    media = MediaCache(
+        cfg.cache_dir,
+        cfg.max_cache_bytes,
+        cfg.max_cache_age,
+        streams,
+    )
+    thumbs = ThumbCache(
+        root=os.path.join(cfg.cache_dir, "thumbs"),
+        max_bytes=cfg.thumb_cache_bytes,
+        fetcher=overrides.get("thumbs_fetcher", fetch_thumbnail),
+    )
+    search_cache = SearchCache(ttl=cfg.search_ttl)
+    meta = MetaCache(media)
 
-    media, err = resolve_media(video_id)
-    if not media:
-        return Response(
-            "Flux indisponible : " + (err or "erreur inconnue"),
-            status=502,
-            mimetype="text/plain",
+    if "ytdlp" in overrides:
+        ytdlp = overrides["ytdlp"]
+    else:
+        ytdlp = YtDlp(
+            bin=cfg.ytdlp_bin,
+            node_bin=cfg.node_bin,
+            ffmpeg_bin=cfg.ffmpeg_bin,
+            request_timeout=cfg.request_timeout,
+            download_timeout=cfg.download_timeout,
+            log=_LOG.warning,
         )
 
-    if media["type"] == "file":
-        return serve_file_with_range(media["path"])
-
-    return Response(
-        "Flux non géré : " + str(media),
-        status=500,
-        mimetype="text/plain",
+    jobs = JobRegistry(
+        media,
+        ytdlp,
+        streams,
+        max_concurrent=cfg.max_concurrent_downloads,
+        max_height=cfg.max_height,
+        log=_LOG.warning,
     )
 
+    services = SimpleNamespace(
+        config=cfg,
+        media=media,
+        streams=streams,
+        thumbs=thumbs,
+        search_cache=search_cache,
+        meta=meta,
+        ytdlp=ytdlp,
+        jobs=jobs,
+    )
 
-@app.errorhandler(400)
-def bad_request(e):
-    return "Requête invalide", 400
+    # Le cache peut être absent ou non inscriptible : l'application démarre
+    # quand même, et /healthz signale l'anomalie.
+    try:
+        media.ensure_dirs()
+    except OSError:
+        _LOG.warning("Impossible de créer les dossiers du cache.", exc_info=True)
+    try:
+        media.clean_tmp()
+    except OSError:
+        _LOG.warning("Impossible de nettoyer les téléchargements temporaires.", exc_info=True)
+    try:
+        media.evict()
+    except OSError:
+        _LOG.warning("Impossible d'évincer les anciens médias.", exc_info=True)
 
+    app = Flask(__name__)
+    app.extensions["lazarus"] = services
+    app.jinja_env.filters["duration"] = format_duration
+    app.jinja_env.filters["views"] = format_views
 
-@app.errorhandler(404)
-def not_found(e):
-    return "Page introuvable", 404
+    @app.route("/")
+    def index():
+        return render_template("index.html", query="", results=None, error=None)
+
+    @app.route("/search")
+    def search():
+        query = (request.args.get("q") or "").strip()[: cfg.max_query_length]
+        if not query:
+            return render_template(
+                "index.html", query="", results=None, error=_EMPTY_QUERY
+            )
+
+        video_id = extract_video_id(query)
+        if video_id is not None:
+            return redirect(url_for("watch", v=video_id))
+
+        refresh = request.args.get("refresh") == "1"
+        results = None if refresh else search_cache.get(query)
+        if results is None:
+            try:
+                results = ytdlp.search(query, limit=cfg.search_limit)
+            except YtDlpError as exc:
+                return render_template(
+                    "index.html", query=query, results=None, error=exc.user_message
+                )
+            search_cache.put(query, results)
+
+        rendered = []
+        for result in results or []:
+            if not isinstance(result, dict):
+                continue
+            result_id = result.get("id")
+            if not is_valid_video_id(result_id):
+                continue
+            meta.put(result_id, dict(result))
+            item = dict(result)
+            item["thumb_url"] = url_for("thumb", video_id=result_id)
+            rendered.append(item)
+
+        return render_template(
+            "index.html", query=query, results=rendered, error=None
+        )
+
+    @app.route("/watch")
+    def watch():
+        video_id = (request.args.get("v") or "").strip()
+        if not is_valid_video_id(video_id):
+            abort(400)
+        video_meta = meta.get(video_id) or {}
+        return render_template(
+            "watch.html",
+            video_id=video_id,
+            meta=video_meta,
+            live_status=video_meta.get("live_status"),
+        )
+
+    @app.route("/api/prepare", methods=["POST"])
+    def api_prepare():
+        video_id = (request.args.get("v") or "").strip()
+        if not is_valid_video_id(video_id):
+            return jsonify({"error": _INVALID_ID}), 400
+
+        retry = request.args.get("retry") == "1"
+        force = request.args.get("force") == "1"
+        try:
+            snapshot = jobs.start(video_id, retry=retry, force=force)
+        except ForceRefused:
+            return jsonify({"error": _BUSY_STREAM}), 409
+
+        status = 200 if snapshot.get("state") in ("ready", "error") else 202
+        return jsonify(snapshot), status
+
+    @app.route("/api/status")
+    def api_status():
+        video_id = (request.args.get("v") or "").strip()
+        if not is_valid_video_id(video_id):
+            return jsonify({"error": _INVALID_ID}), 400
+        return jsonify(jobs.status(video_id))
+
+    @app.route("/stream")
+    def stream():
+        video_id = (request.args.get("v") or "").strip()
+        if not is_valid_video_id(video_id):
+            return Response(_INVALID_ID, status=400, mimetype="text/plain")
+        if not media.has(video_id):
+            return Response(_NOT_PREPARED, status=425, mimetype="text/plain")
+
+        media.touch(video_id)
+        return range_response(
+            media.media_path(video_id),
+            request.headers.get("Range"),
+            streams,
+            head=request.method == "HEAD",
+        )
+
+    @app.route("/thumb/<video_id>.jpg")
+    def thumb(video_id):
+        size = request.args.get("size", "mq")
+        if not is_valid_video_id(video_id) or size not in ("mq", "hq"):
+            abort(404)
+        data = thumbs.get(video_id, size)
+        if data is None:
+            abort(404)
+        return Response(data, mimetype="image/jpeg")
+
+    @app.route("/healthz")
+    def healthz():
+        checks = {
+            "ytdlp": shutil.which(cfg.ytdlp_bin) is not None,
+            "ffmpeg": shutil.which(cfg.ffmpeg_bin) is not None,
+            "ffprobe": shutil.which(cfg.ffprobe_bin) is not None,
+            "node": shutil.which(cfg.node_bin or "node") is not None,
+            "cache": media.writable(),
+        }
+        if all(checks.values()):
+            return jsonify({"status": "ok", "checks": checks})
+        return jsonify({"status": "degraded", "checks": checks}), 503
+
+    def _error_response(code: int, message: str):
+        if request.path.startswith("/api/"):
+            return jsonify({"error": message}), code
+        return (
+            render_template("errors/%d.html" % code, message=message),
+            code,
+        )
+
+    @app.errorhandler(400)
+    def bad_request(_error):
+        return _error_response(400, "Requête invalide.")
+
+    @app.errorhandler(404)
+    def not_found(_error):
+        return _error_response(404, "Page introuvable.")
+
+    @app.errorhandler(500)
+    def server_error(_error):
+        return _error_response(500, "Erreur interne du serveur.")
+
+    @app.after_request
+    def add_headers(response):
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "SAMEORIGIN"
+
+        path = request.path
+        if path.startswith("/static/"):
+            response.headers["Cache-Control"] = "public, max-age=604800"
+        elif path.startswith("/api/") or path == "/stream":
+            response.headers["Cache-Control"] = "no-store"
+        elif response.mimetype == "text/html":
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
+    return app
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=3616, debug=False, threaded=True)
+    create_app().run(host="0.0.0.0", port=3616, debug=False, threaded=True)

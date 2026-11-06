@@ -136,8 +136,8 @@
       {% for video in results %}
       <li>
         <a href="/watch?v={{ video.id|e }}">
-          {% if video.thumbnail %}
-          <img class="thumb" src="{{ video.thumbnail|e }}" alt=" miniature " onerror="hideBrokenThumb(this)">
+          {% if video.thumb_url %}
+          <img class="thumb" src="{{ video.thumb_url|e }}" alt=" miniature " onerror="hideBrokenThumb(this)">
           {% endif %}
           <div class="meta">
             <p class="title">{{ video.title|e }}</p>
