@@ -423,7 +423,6 @@
     if (!player) {
       return;
     }
-    errorRetried = false;
     if (resumeAt > 0) {
       try {
         player.currentTime = resumeAt;
@@ -592,15 +591,23 @@
   }
 
   function onPlayerError() {
-    if (!player || errorRetried) {
+    if (!player) {
       return;
     }
-    errorRetried = true;
     try {
-      resumeAt = player.currentTime > 0 ? player.currentTime : 0;
+      if (player.currentTime > 0) {
+        resumeAt = player.currentTime;
+      }
     } catch (timeError) {
       resumeAt = 0;
     }
+    // Une seule relance automatique par chargement de page : si le flux
+    // reste corrompu, on rend la main à l'utilisateur via #retry.
+    if (errorRetried) {
+      showError("La lecture a échoué. Réessaie pour relancer la préparation.");
+      return;
+    }
+    errorRetried = true;
     prepare(false);
   }
 
@@ -626,6 +633,7 @@
 
   if (retryEl) {
     retryEl.onclick = function () {
+      errorRetried = false;
       prepare(true);
     };
   }

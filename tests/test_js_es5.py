@@ -23,3 +23,13 @@ def test_watch_js_declares_storage_contract():
 def test_watch_js_has_no_innerhtml_with_metadata():
     source = WATCH_JS.read_text(encoding="utf-8")
     assert "innerHTML" not in source
+
+def test_watch_js_player_error_guard_not_reset_on_metadata():
+    # Le garde anti-boucle ne doit pas être réarmé par loadedmetadata,
+    # sinon un flux corrompu boucle indéfiniment sur /api/prepare.
+    source = WATCH_JS.read_text(encoding="utf-8")
+    start = source.find("function onLoadedMetadata()")
+    assert start != -1
+    end = source.find("function onEnded()", start)
+    assert end != -1
+    assert "errorRetried = false" not in source[start:end]
