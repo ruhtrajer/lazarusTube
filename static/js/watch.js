@@ -1,6 +1,14 @@
 (function () {
   "use strict";
 
+  var RESUME_KEY = "lazarus.v1.resume";
+  var HISTORY_KEY = "lazarus.v1.history";
+  var FAVORITES_KEY = "lazarus.v1.favorites";
+  var MAX_RESUME = 50;
+  var MAX_HISTORY = 50;
+  var MAX_FAVORITES = 200;
+  var RESUME_INTERVAL_MS = 5000;
+
   var id = document.body.getAttribute("data-video-id");
   var player = document.getElementById("player");
   var overlay = document.getElementById("prepare-overlay");
@@ -12,7 +20,55 @@
   var retryEl = document.getElementById("retry");
   var titleEl = document.getElementById("video-title");
   var metaEl = document.getElementById("video-meta");
+  var favoriteEl = document.getElementById("favorite");
+  var backEl = document.getElementById("back-10");
+  var forwardEl = document.getElementById("forward-10");
+  var fullscreenEl = document.getElementById("fullscreen");
+  var resumeBar = document.getElementById("resume-bar");
+  var resumeTimeEl = document.getElementById("resume-time");
+  var resumeYes = document.getElementById("resume-yes");
+  var resumeNo = document.getElementById("resume-no");
   var timer = null;
+  var lastResumeSave = 0;
+  var historyAdded = false;
+  var resumeAt = 0;
+  var errorRetried = false;
+  var resumeOffer = null;
+
+  function now() {
+    return (new Date()).getTime();
+  }
+
+  function isArray(value) {
+    return Object.prototype.toString.call(value) === "[object Array]";
+  }
+
+  function storageGet(key, fallback) {
+    if (!window.Lazarus || !window.Lazarus.storage) {
+      return fallback;
+    }
+    return window.Lazarus.storage.get(key, fallback);
+  }
+
+  function storageSet(key, value) {
+    if (!window.Lazarus || !window.Lazarus.storage) {
+      return false;
+    }
+    return window.Lazarus.storage.set(key, value);
+  }
+
+  function dataValue(name) {
+    var value = document.body.getAttribute(name);
+    return value === null ? "" : value;
+  }
+
+  function setDataValue(name, value) {
+    try {
+      document.body.setAttribute(name, value === null || typeof value === "undefined" ? "" : String(value));
+    } catch (attrError) {
+      return;
+    }
+  }
 
   function stopPolling() {
     if (timer !== null) {
@@ -39,6 +95,13 @@
     return minutes + ":" + pad(seconds);
   }
 
+  function formatTime(value) {
+    if (window.Lazarus && typeof window.Lazarus.formatTime === "function") {
+      return window.Lazarus.formatTime(value);
+    }
+    return formatDuration(value);
+  }
+
   function compactNumber(value) {
     var text = value.toFixed(1);
     if (text.slice(-2) === ".0") {
@@ -61,12 +124,57 @@
     return String(views);
   }
 
+  function mediaDuration() {
+    var value = player ? player.duration : NaN;
+    if (typeof value === "number" && isFinite(value) && value > 0) {
+      return value;
+    }
+    var fallback = parseInt(dataValue("data-duration"), 10);
+    if (!isNaN(fallback) && fallback > 0) {
+      return fallback;
+    }
+    return 0;
+  }
+
+  function videoEntry() {
+    var duration = parseInt(dataValue("data-duration"), 10);
+    var views = parseInt(dataValue("data-view-count"), 10);
+    return {
+      id: id,
+      title: dataValue("data-title"),
+      channel: dataValue("data-channel"),
+      duration: isNaN(duration) ? 0 : duration,
+      view_count: isNaN(views) ? 0 : views,
+      ts: now()
+    };
+  }
+
+  function readList(key) {
+    var stored = storageGet(key, []);
+    if (!isArray(stored)) {
+      return [];
+    }
+    return stored;
+  }
+
   function updateMeta(meta) {
     if (!meta) {
       return;
     }
-    if (meta.title && titleEl) {
-      titleEl.textContent = meta.title;
+    if (meta.title) {
+      if (titleEl) {
+        titleEl.textContent = meta.title;
+      }
+      setDataValue("data-title", meta.title);
+    }
+    if (meta.channel) {
+      setDataValue("data-channel", meta.channel);
+    }
+    if (meta.duration !== null && typeof meta.duration !== "undefined") {
+      setDataValue("data-duration", meta.duration);
+    }
+    if (meta.view_count !== null && typeof meta.view_count !== "undefined") {
+      setDataValue("data-view-count", meta.view_count);
     }
     if (!metaEl) {
       return;
@@ -216,10 +324,318 @@
     });
   }
 
+  function readResumeMap() {
+    var stored = storageGet(RESUME_KEY, {});
+    if (!stored || typeof stored !== "object" || isArray(stored)) {
+      return {};
+    }
+    return stored;
+  }
+
+  function pruneResumeMap(map) {
+    var keys = [];
+    var key;
+    for (key in map) {
+      if (Object.prototype.hasOwnProperty.call(map, key)) {
+        keys.push(key);
+      }
+    }
+    if (keys.length <= MAX_RESUME) {
+      return map;
+    }
+    keys.sort(function (a, b) {
+      var ta = map[a] && typeof map[a].ts === "number" ? map[a].ts : 0;
+      var tb = map[b] && typeof map[b].ts === "number" ? map[b].ts : 0;
+      return tb - ta;
+    });
+    var pruned = {};
+    var i;
+    for (i = 0; i < MAX_RESUME; i += 1) {
+      pruned[keys[i]] = map[keys[i]];
+    }
+    return pruned;
+  }
+
+  function saveResume(seconds, duration) {
+    var map = readResumeMap();
+    map[id] = {
+      t: Math.floor(seconds),
+      d: Math.floor(duration),
+      ts: now()
+    };
+    storageSet(RESUME_KEY, pruneResumeMap(map));
+  }
+
+  function clearResume() {
+    var map = readResumeMap();
+    if (map[id]) {
+      delete map[id];
+      storageSet(RESUME_KEY, map);
+    }
+  }
+
+  function storedResume() {
+    var entry = readResumeMap()[id];
+    if (!entry) {
+      return null;
+    }
+    var seconds = parseInt(entry.t, 10);
+    if (isNaN(seconds) || seconds <= 0) {
+      return null;
+    }
+    return seconds;
+  }
+
+  function showResumeBar(seconds) {
+    if (!resumeBar) {
+      return;
+    }
+    if (resumeTimeEl) {
+      resumeTimeEl.textContent = formatTime(seconds);
+    }
+    resumeBar.className = "";
+  }
+
+  function hideResumeBar() {
+    if (resumeBar) {
+      resumeBar.className = "hidden";
+    }
+  }
+
+  function onTimeUpdate() {
+    if (!player) {
+      return;
+    }
+    var current = player.currentTime;
+    var duration = mediaDuration();
+    if (!(current > 5) || !(duration > 0) || !(current < duration - 10)) {
+      return;
+    }
+    var stamp = now();
+    if (stamp - lastResumeSave < RESUME_INTERVAL_MS) {
+      return;
+    }
+    lastResumeSave = stamp;
+    saveResume(current, duration);
+  }
+
+  function onLoadedMetadata() {
+    if (!player) {
+      return;
+    }
+    errorRetried = false;
+    if (resumeAt > 0) {
+      try {
+        player.currentTime = resumeAt;
+      } catch (seekError) {
+        resumeAt = 0;
+      }
+      resumeAt = 0;
+      return;
+    }
+    var seconds = storedResume();
+    if (seconds !== null) {
+      resumeOffer = seconds;
+      showResumeBar(seconds);
+    }
+  }
+
+  function onEnded() {
+    resumeOffer = null;
+    hideResumeBar();
+    clearResume();
+  }
+
+  function onResumeYes() {
+    var seconds = resumeOffer;
+    if (seconds === null) {
+      seconds = storedResume();
+    }
+    if (player && seconds !== null) {
+      try {
+        player.currentTime = seconds;
+      } catch (seekError) {
+        return;
+      }
+      lastResumeSave = now();
+    }
+    resumeOffer = null;
+    hideResumeBar();
+  }
+
+  function onResumeNo() {
+    resumeOffer = null;
+    hideResumeBar();
+    clearResume();
+  }
+
+  function isFavorite() {
+    var items = readList(FAVORITES_KEY);
+    var i;
+    for (i = 0; i < items.length; i += 1) {
+      if (items[i] && items[i].id === id) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function setFavoriteState(active) {
+    if (!favoriteEl) {
+      return;
+    }
+    favoriteEl.setAttribute("aria-pressed", active ? "true" : "false");
+    favoriteEl.textContent = active ? "♥ Favori" : "♡ Favori";
+  }
+
+  function toggleFavorite() {
+    var items = readList(FAVORITES_KEY);
+    var next = [];
+    var seen = {};
+    var wasFavorite = false;
+    var i;
+    for (i = 0; i < items.length; i += 1) {
+      if (items[i] && items[i].id === id) {
+        wasFavorite = true;
+      }
+    }
+    if (!wasFavorite) {
+      next.push(videoEntry());
+      seen[id] = true;
+    }
+    for (i = 0; i < items.length; i += 1) {
+      var item = items[i];
+      if (!item || item.id === id || typeof item.id !== "string" || seen[item.id]) {
+        continue;
+      }
+      seen[item.id] = true;
+      next.push(item);
+    }
+    if (next.length > MAX_FAVORITES) {
+      next = next.slice(0, MAX_FAVORITES);
+    }
+    storageSet(FAVORITES_KEY, next);
+    setFavoriteState(!wasFavorite);
+  }
+
+  function addHistory() {
+    var items = readList(HISTORY_KEY);
+    var next = [videoEntry()];
+    var seen = {};
+    var i;
+    seen[id] = true;
+    for (i = 0; i < items.length; i += 1) {
+      var item = items[i];
+      if (!item || typeof item.id !== "string" || seen[item.id]) {
+        continue;
+      }
+      seen[item.id] = true;
+      next.push(item);
+    }
+    if (next.length > MAX_HISTORY) {
+      next = next.slice(0, MAX_HISTORY);
+    }
+    storageSet(HISTORY_KEY, next);
+  }
+
+  function onPlay() {
+    if (historyAdded) {
+      return;
+    }
+    historyAdded = true;
+    addHistory();
+  }
+
+  function onBack10() {
+    if (!player) {
+      return;
+    }
+    try {
+      player.currentTime = Math.max(0, player.currentTime - 10);
+    } catch (seekError) {
+      return;
+    }
+  }
+
+  function onForward10() {
+    if (!player) {
+      return;
+    }
+    var duration = mediaDuration();
+    if (duration <= 0) {
+      duration = player.duration;
+    }
+    var target = player.currentTime + 10;
+    if (typeof duration === "number" && isFinite(duration) && duration > 0 && target > duration) {
+      target = duration;
+    }
+    try {
+      player.currentTime = target;
+    } catch (seekError) {
+      return;
+    }
+  }
+
+  function onFullscreen() {
+    if (!player) {
+      return;
+    }
+    try {
+      if (player.webkitEnterFullscreen) {
+        player.webkitEnterFullscreen();
+      } else if (player.requestFullscreen) {
+        player.requestFullscreen();
+      }
+    } catch (fullscreenError) {
+      return;
+    }
+  }
+
+  function onPlayerError() {
+    if (!player || errorRetried) {
+      return;
+    }
+    errorRetried = true;
+    try {
+      resumeAt = player.currentTime > 0 ? player.currentTime : 0;
+    } catch (timeError) {
+      resumeAt = 0;
+    }
+    prepare(false);
+  }
+
+  if (favoriteEl) {
+    setFavoriteState(isFavorite());
+    favoriteEl.onclick = toggleFavorite;
+  }
+  if (backEl) {
+    backEl.onclick = onBack10;
+  }
+  if (forwardEl) {
+    forwardEl.onclick = onForward10;
+  }
+  if (fullscreenEl) {
+    fullscreenEl.onclick = onFullscreen;
+  }
+  if (resumeYes) {
+    resumeYes.onclick = onResumeYes;
+  }
+  if (resumeNo) {
+    resumeNo.onclick = onResumeNo;
+  }
+
   if (retryEl) {
     retryEl.onclick = function () {
       prepare(true);
     };
+  }
+
+  if (player && player.addEventListener) {
+    player.addEventListener("timeupdate", onTimeUpdate);
+    player.addEventListener("loadedmetadata", onLoadedMetadata);
+    player.addEventListener("play", onPlay);
+    player.addEventListener("ended", onEnded);
+    player.addEventListener("error", onPlayerError);
   }
 
   if (window.addEventListener) {

@@ -183,3 +183,20 @@ def test_watch_uses_sidecar_metadata(client, services, tmp_path):
 def test_watch_without_meta_has_placeholders(client):
     html = client.get("/watch?v=dQw4w9WgXcQ").get_data(as_text=True)
     assert "Préparation de la vidéo" in html
+
+def test_watch_has_library_controls(client):
+    html = client.get("/watch?v=dQw4w9WgXcQ").get_data(as_text=True)
+    for element_id in ('id="favorite"', 'id="back-10"', 'id="forward-10"',
+                       'id="fullscreen"', 'id="resume-bar"', 'id="resume-yes"',
+                       'id="resume-no"'):
+        assert element_id in html
+
+def test_watch_has_metadata_dataset_for_storage(client, services, tmp_path):
+    services.media.publish("dQw4w9WgXcQ", _tmp(tmp_path),
+                           {"title": "Titre", "channel": "Chaîne", "duration": 125,
+                            "view_count": 1200000})
+    html = client.get("/watch?v=dQw4w9WgXcQ").get_data(as_text=True)
+    assert 'data-title="Titre"' in html
+    assert 'data-channel="Chaîne"' in html
+    assert 'data-duration="125"' in html
+    assert 'data-view-count="1200000"' in html

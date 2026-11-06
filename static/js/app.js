@@ -74,12 +74,42 @@
     }
   }
 
+  function isArray(value) {
+    return Object.prototype.toString.call(value) === "[object Array]";
+  }
+
+  function oldestIndex(items) {
+    var index = items.length - 1;
+    var oldest = null;
+    var i;
+    for (i = 0; i < items.length; i += 1) {
+      var ts = items[i] && typeof items[i].ts === "number" ? items[i].ts : null;
+      if (ts !== null && (oldest === null || ts < oldest)) {
+        oldest = ts;
+        index = i;
+      }
+    }
+    return index;
+  }
+
   function storageSet(key, value) {
     try {
       window.localStorage.setItem(key, JSON.stringify(value));
       return true;
     } catch (storageError) {
-      return false;
+      // Quota dépassé : on abandonne l'entrée la plus ancienne du tableau
+      // puis on réessaie une seule fois.
+      if (!isArray(value) || value.length === 0) {
+        return false;
+      }
+      var trimmed = value.slice(0);
+      trimmed.splice(oldestIndex(trimmed), 1);
+      try {
+        window.localStorage.setItem(key, JSON.stringify(trimmed));
+        return true;
+      } catch (retryError) {
+        return false;
+      }
     }
   }
 

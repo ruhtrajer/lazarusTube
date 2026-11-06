@@ -3,7 +3,7 @@
 
 {% block title %}{{ meta.title or "Lecture" }}{% endblock %}
 
-{% block body_attrs %} data-video-id="{{ video_id }}"{% endblock %}
+{% block body_attrs %} data-video-id="{{ video_id }}" data-title="{{ meta.title or '' }}" data-channel="{{ meta.channel or '' }}" data-duration="{{ meta.duration or '' }}" data-view-count="{{ meta.view_count or '' }}"{% endblock %}
 
 {% block content %}
 <a class="back" href="/">&larr; Retour à la recherche</a>
@@ -32,6 +32,20 @@
 <div class="video-info">
   <h1 id="video-title">{{ meta.title or "Préparation de la vidéo" }}</h1>
   <p id="video-meta">{% if meta.channel %}{{ meta.channel }}{% endif %}{% if meta.view_count %}{% if meta.channel %} · {% endif %}{{ meta.view_count|views }} vues{% endif %}{% if meta.duration %}{% if meta.channel or meta.view_count %} · {% endif %}{{ meta.duration|duration }}{% endif %}</p>
+
+  <div id="resume-bar" class="hidden" aria-live="polite">
+    <span class="resume-text">Reprendre à <span id="resume-time">0:00</span> ?</span>
+    <button id="resume-yes" class="btn btn-primary" type="button">Oui</button>
+    <button id="resume-no" class="btn btn-secondary" type="button">Non</button>
+  </div>
+
+  <div class="actions">
+    <button id="favorite" class="action" type="button" aria-pressed="false">♡ Favori</button>
+    <button id="back-10" class="action" type="button">−10 s</button>
+    <button id="forward-10" class="action" type="button">+10 s</button>
+    <button id="fullscreen" class="action" type="button">Plein écran</button>
+  </div>
+
   <p class="video-links"><a id="youtube-link" href="https://www.youtube.com/watch?v={{ video_id }}" target="_blank" rel="noopener">Ouvrir sur YouTube</a></p>
 </div>
 {% endblock %}
