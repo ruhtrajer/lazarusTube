@@ -103,6 +103,12 @@ Aucun réseau ni vrai téléchargement n'est utilisé en test.
 - Si YouTube refuse les signatures, vérifiez que `node` est installé et accessible (`LAZARUS_NODE_BIN` sinon).
 - En cas d'erreur anti-bot (HTTP 429 / "Sign in to confirm you're not a bot"), réessayez plus tard ; il n'y a pas de gestion de compte.
 
+## Vérification
+
+La checklist de tests manuels pour iPad 2 / iOS 9 se trouve dans
+`docs/manual-test-ios9.md` (recherche, miniatures, lecture, seek, reprise,
+historique, favoris, URL collée, ID invalide, mode privé, etc.).
+
 ## Limites connues
 
 - 3 appareils maximum en lecture simultanée (2 téléchargements simultanés).

@@ -4,7 +4,18 @@ import re
 JS_DIR = pathlib.Path(__file__).resolve().parents[1] / "static" / "js"
 WATCH_JS = JS_DIR / "watch.js"
 LIBRARY_JS = JS_DIR / "library.js"
+CSS = pathlib.Path(__file__).resolve().parents[1] / "static" / "css" / "app.css"
+TEMPLATES = pathlib.Path(__file__).resolve().parents[1] / "templates"
 FORBIDDEN = [r"=>", r"\bconst\s", r"\blet\s", r"\basync\s", r"\bawait\s", r"`", r"\bfetch\s*\("]
+FORBIDDEN_CSS = [
+    r"display\s*:\s*grid",
+    r"var\s*\(\s*--",
+    r"position\s*:\s*sticky",
+    r"(?<![-a-z])gap\s*:",
+    r"aspect-ratio",
+    r"clamp\s*\(",
+    r":focus-visible",
+]
 
 def test_js_files_are_es5():
     files = sorted(JS_DIR.glob("*.js"))
@@ -43,3 +54,22 @@ def test_library_js_uses_safe_dom_and_storage():
     assert "textContent" in source
     assert "innerHTML" not in source
     assert "confirm(" in source
+
+
+def test_css_is_safari9_compatible():
+    source = CSS.read_text(encoding="utf-8")
+    for pattern in FORBIDDEN_CSS:
+        assert not re.search(pattern, source), "CSS interdit : " + pattern
+
+
+def test_templates_do_not_disable_zoom():
+    for path in TEMPLATES.rglob("*.html"):
+        source = path.read_text(encoding="utf-8")
+        assert "user-scalable=no" not in source, path.name
+
+
+def test_video_tags_are_ios9_ready():
+    source = (TEMPLATES / "watch.html").read_text(encoding="utf-8")
+    assert "playsinline" in source
+    assert "webkit-playsinline" in source
+    assert "autoplay" not in source
