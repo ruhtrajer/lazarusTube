@@ -161,3 +161,25 @@ def test_search_error_has_retry_link(client, services):
     html = client.get("/search?q=jazz").get_data(as_text=True)
     assert "Réessayer" in html
     assert "refresh=1" in html
+
+def test_watch_has_poster_overlay_and_player(client):
+    html = client.get("/watch?v=dQw4w9WgXcQ").get_data(as_text=True)
+    assert 'id="player"' in html
+    assert 'playsinline' in html and 'webkit-playsinline' in html
+    assert 'poster="/thumb/dQw4w9WgXcQ.jpg?size=hq"' in html
+    assert 'id="prepare-overlay"' in html
+    assert 'id="progress-fill"' in html
+    assert 'aria-live="polite"' in html
+    assert 'id="retry"' in html
+    assert 'href="https://www.youtube.com/watch?v=dQw4w9WgXcQ"' in html
+
+def test_watch_uses_sidecar_metadata(client, services, tmp_path):
+    services.media.publish("dQw4w9WgXcQ", _tmp(tmp_path),
+                           {"title": "Titre", "channel": "Chaîne", "duration": 125,
+                            "view_count": 1200000})
+    html = client.get("/watch?v=dQw4w9WgXcQ").get_data(as_text=True)
+    assert "Titre" in html and "Chaîne" in html and "1,2 M" in html and "2:05" in html
+
+def test_watch_without_meta_has_placeholders(client):
+    html = client.get("/watch?v=dQw4w9WgXcQ").get_data(as_text=True)
+    assert "Préparation de la vidéo" in html

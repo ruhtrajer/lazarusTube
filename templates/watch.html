@@ -1,95 +1,41 @@
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{{ meta.title or "Lecture" }} - LazarusTube</title>
-<style>
-  * { -webkit-box-sizing: border-box; box-sizing: border-box; }
-  html, body {
-    margin: 0;
-    padding: 0;
-    background: #111;
-    color: #eee;
-    font-family: -apple-system, "Helvetica Neue", Arial, sans-serif;
-    font-size: 16px;
-  }
-  .container {
-    width: 100%;
-    max-width: 1000px;
-    margin: 0 auto;
-    padding: 16px;
-  }
-  .back {
-    display: inline-block;
-    margin: 12px 0;
-    color: #4ea1ff;
-    text-decoration: none;
-    font-size: 16px;
-  }
-  .player {
-    background: #000;
-    -webkit-border-radius: 8px;
-    border-radius: 8px;
-    overflow: hidden;
-    border: 1px solid #333;
-  }
-  video {
-    display: block;
-    width: 100%;
-    height: auto;
-    background: #000;
-  }
-  .title {
-    margin: 16px 0 8px;
-    font-size: 20px;
-  }
-  #status {
-    margin: 12px 0;
-    padding: 12px;
-    -webkit-border-radius: 6px;
-    border-radius: 6px;
-    background: #1a2a3a;
-    border: 1px solid #3a6aa3;
-    color: #b3d4ff;
-    min-height: 20px;
-  }
-  #retry {
-    margin: 8px 0;
-    padding: 12px 20px;
-    font-size: 16px;
-    background: #175071;
-    color: #fff;
-    border: none;
-    -webkit-border-radius: 6px;
-    border-radius: 6px;
-    cursor: pointer;
-  }
-  footer {
-    text-align: center;
-    color: #777;
-    font-size: 13px;
-    padding: 20px;
-  }
-</style>
-</head>
-<body data-video-id="{{ video_id }}">
-<div class="container">
-  <a class="back" href="/">&larr; Retour à la recherche</a>
+{% extends "base.html" %}
+{% set active_page = "home" %}
 
-  <div class="player">
-    <video id="player" controls playsinline webkit-playsinline preload="metadata">
-      Votre lecteur ne supporte pas la lecture vidéo.
-    </video>
+{% block title %}{{ meta.title or "Lecture" }}{% endblock %}
+
+{% block body_attrs %} data-video-id="{{ video_id }}"{% endblock %}
+
+{% block content %}
+<a class="back" href="/">&larr; Retour à la recherche</a>
+
+<div class="player-wrap">
+  <video id="player" poster="/thumb/{{ video_id }}.jpg?size=hq" controls playsinline webkit-playsinline preload="metadata">
+    Votre lecteur ne supporte pas la lecture vidéo.
+  </video>
+
+  <div id="prepare-overlay" aria-live="polite">
+    <div class="prepare-inner">
+      <p id="prepare-text" class="prepare-text">Préparation de la vidéo…</p>
+      <div class="progress-track"><div id="progress-fill"></div></div>
+      <p id="progress-label" class="progress-label">0 %</p>
+    </div>
   </div>
 
-  <h1 class="title">{{ meta.title or "Lecture" }}</h1>
-  <div id="status" aria-live="polite"></div>
-  <button id="retry" type="button" style="display:none">Réessayer</button>
-
-  <footer>LazarusTube &middot; Compatible iPad 2 / iOS 9</footer>
+  <div id="error-box" class="hidden" aria-live="polite">
+    <div class="prepare-inner">
+      <p id="error-text">Impossible de préparer cette vidéo.</p>
+      <button id="retry" class="btn btn-primary" type="button">Réessayer</button>
+    </div>
+  </div>
 </div>
-<script src="/static/js/app.js"></script>
-<script src="/static/js/watch.js"></script>
-</body>
-</html>
+
+<div class="video-info">
+  <h1 id="video-title">{{ meta.title or "Préparation de la vidéo" }}</h1>
+  <p id="video-meta">{% if meta.channel %}{{ meta.channel }}{% endif %}{% if meta.view_count %}{% if meta.channel %} · {% endif %}{{ meta.view_count|views }} vues{% endif %}{% if meta.duration %}{% if meta.channel or meta.view_count %} · {% endif %}{{ meta.duration|duration }}{% endif %}</p>
+  <p class="video-links"><a id="youtube-link" href="https://www.youtube.com/watch?v={{ video_id }}" target="_blank" rel="noopener">Ouvrir sur YouTube</a></p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/watch.js') }}?v={{ asset_version }}"></script>
+{% endblock %}

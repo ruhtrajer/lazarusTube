@@ -11,7 +11,7 @@
 <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/favicon.png') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}?v={{ asset_version }}">
 </head>
-<body>
+<body{% block body_attrs %}{% endblock %}>
 <header class="site-header">
   <div class="header-inner">
     <a class="logo" href="{{ url_for('index') }}">
