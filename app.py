@@ -166,22 +166,49 @@ def create_app(overrides: dict | None = None) -> Flask:
     app.jinja_env.filters["duration"] = format_duration
     app.jinja_env.filters["views"] = format_views
 
+    def asset_version() -> int:
+        """Version de cache des assets, dérivée de la mtime de ``app.css``."""
+        path = os.path.join(app.static_folder, "css", "app.css")
+        try:
+            return int(round(os.path.getmtime(path)))
+        except OSError:
+            return 0
+
+    @app.context_processor
+    def inject_assets():
+        # ``active_page`` est fourni par chaque route ; la valeur vide évite un
+        # ``Undefined`` dans les gabarits qui n'en définissent pas.
+        return {"asset_version": asset_version(), "active_page": ""}
+
     @app.route("/")
     def index():
-        return render_template("index.html", query="", results=None, error=None)
+        return render_template(
+            "index.html",
+            query="",
+            results=None,
+            error=None,
+            active_page="home",
+            refresh_url=None,
+        )
 
     @app.route("/search")
     def search():
         query = (request.args.get("q") or "").strip()[: cfg.max_query_length]
         if not query:
             return render_template(
-                "index.html", query="", results=None, error=_EMPTY_QUERY
+                "index.html",
+                query="",
+                results=None,
+                error=_EMPTY_QUERY,
+                active_page="home",
+                refresh_url=None,
             )
 
         video_id = extract_video_id(query)
         if video_id is not None:
             return redirect(url_for("watch", v=video_id))
 
+        refresh_url = url_for("search", q=query, refresh=1)
         refresh = request.args.get("refresh") == "1"
         results = None if refresh else search_cache.get(query)
         if results is None:
@@ -189,7 +216,12 @@ def create_app(overrides: dict | None = None) -> Flask:
                 results = ytdlp.search(query, limit=cfg.search_limit)
             except YtDlpError as exc:
                 return render_template(
-                    "index.html", query=query, results=None, error=exc.user_message
+                    "index.html",
+                    query=query,
+                    results=None,
+                    error=exc.user_message,
+                    active_page="home",
+                    refresh_url=refresh_url,
                 )
             search_cache.put(query, results)
 
@@ -206,7 +238,12 @@ def create_app(overrides: dict | None = None) -> Flask:
             rendered.append(item)
 
         return render_template(
-            "index.html", query=query, results=rendered, error=None
+            "index.html",
+            query=query,
+            results=rendered,
+            error=None,
+            active_page="home",
+            refresh_url=refresh_url,
         )
 
     @app.route("/watch")

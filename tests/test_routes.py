@@ -126,3 +126,38 @@ def test_prepare_force_conflict_is_409(client, services, tmp_path):
         assert "error" in resp.get_json()
     finally:
         services.streams.end(path)
+
+def test_pages_share_shell_and_ios_meta(client):
+    html = client.get("/").get_data(as_text=True)
+    assert '/static/css/app.css' in html
+    assert '/static/js/app.js' in html
+    assert 'apple-touch-icon' in html
+    assert 'user-scalable=no' not in html
+    assert 'href="/history"' in html and 'href="/favorites"' in html
+
+def test_search_page_shows_card_metadata(client):
+    html = client.get("/search?q=jazz").get_data(as_text=True)
+    assert 'class="card"' in html
+    assert 'class="card-thumb"' in html
+    assert 'alt=""' in html
+    assert "Chaîne" in html
+    assert "1,2 M" in html
+    assert "2:05" in html
+    assert 'class="badge-duration"' in html
+
+def test_search_page_has_loading_hook_and_recent_searches(client):
+    html = client.get("/").get_data(as_text=True)
+    assert 'id="recent-searches"' in html
+    assert 'id="search-submit"' in html
+    assert '/static/js/search.js' in html
+
+def test_empty_results_message(client, services):
+    services.ytdlp.results = []
+    html = client.get("/search?q=inconnu").get_data(as_text=True)
+    assert "Aucun résultat" in html
+
+def test_search_error_has_retry_link(client, services):
+    services.ytdlp.search_error = YtDlpError("Recherche impossible pour le moment.")
+    html = client.get("/search?q=jazz").get_data(as_text=True)
+    assert "Réessayer" in html
+    assert "refresh=1" in html
